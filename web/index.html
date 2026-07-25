@@ -105,6 +105,12 @@
           <option value="name" data-i18n="lib.sortName">이름순</option>
           <option value="quality" data-i18n="lib.sortQuality">품질 낮은순</option>
         </select>
+        <select id="libPageSize" title="페이지당 항목 수">
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
         <button id="libDupes" data-i18n="lib.dupes">중복 보기</button>
         <button id="libTrash" data-i18n="lib.trash">휴지통</button>
         <button id="libExportJson">JSON ⬇</button>
@@ -115,9 +121,7 @@
       </div>
     </div>
     <div id="libGrid" class="grid"></div>
-    <div class="row center">
-      <button id="libMore" class="hidden" data-i18n="results.more">더 보기</button>
-    </div>
+    <div id="libPager" class="pager"></div>
   </section>
 
   <!-- ============================ Stats tab -->

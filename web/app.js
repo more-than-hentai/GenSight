@@ -568,7 +568,13 @@ const BROKEN_IMG =
 
 /* ---------------------------------------------------------- library */
 
-const lib = { offset: 0, dupes: false, trash: false, dir: "" };
+const lib = {
+  page: 1,
+  size: +localStorage.getItem("gensight.pageSize") || 50,
+  dupes: false,
+  trash: false,
+  dir: "",
+};
 
 function openLibraryForDir(directory) {
   lib.dir = directory;
@@ -605,7 +611,7 @@ function libParams() {
   const p = new URLSearchParams({
     q: f.q, tool: f.tool, min_rating: f.min_rating, group: f.group,
     quality: f.quality, directory: f.directory, sort: $("#libSort").value,
-    offset: lib.offset, limit: state.pageSize,
+    offset: (lib.page - 1) * lib.size, limit: lib.size,
   });
   if (f.favorite) p.set("favorite", "true");
   return p;
@@ -613,13 +619,18 @@ function libParams() {
 
 async function loadLibrary(reset) {
   updateDirChip();
-  if (lib.trash) { loadTrash(); return; }
-  if (lib.dupes) { loadDuplicates(); return; }
-  if (reset) { lib.offset = 0; $("#libGrid").innerHTML = ""; }
+  if (lib.trash) { $("#libPager").innerHTML = ""; loadTrash(); return; }
+  if (lib.dupes) { $("#libPager").innerHTML = ""; loadDuplicates(); return; }
+  if (reset) lib.page = 1;
   let data;
   try {
     data = await api.get(`/api/library?${libParams()}`);
   } catch (e) { toast(e.message, true); return; }
+
+  // The last page may vanish after deletions — snap back
+  const pages = Math.max(1, Math.ceil(data.total / lib.size));
+  if (lib.page > pages) { lib.page = pages; loadLibrary(false); return; }
+
   $("#libCount").textContent = t("results.count", "결과") + `: ${data.total}`;
   const groupSel = $("#libGroup");
   const prevGroup = groupSel.value;
@@ -631,14 +642,59 @@ async function loadLibrary(reset) {
   }
   groupSel.value = prevGroup;
   const grid = $("#libGrid");
+  grid.innerHTML = "";
   for (const r of data.items) grid.appendChild(renderLibItem(r));
-  lib.offset += data.items.length;
-  $("#libMore").classList.toggle("hidden", lib.offset >= data.total);
+  renderPager(data.total, pages);
+}
+
+function renderPager(total, pages) {
+  const pager = $("#libPager");
+  pager.innerHTML = "";
+  if (pages <= 1) return;
+
+  const goto = (p) => {
+    lib.page = p;
+    loadLibrary(false);
+    window.scrollTo({ top: 0 });
+  };
+  const btn = (label, page, opts = {}) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (opts.current) b.classList.add("current");
+    b.disabled = !!opts.disabled;
+    if (!opts.disabled && !opts.current) b.onclick = () => goto(page);
+    pager.appendChild(b);
+  };
+  const ellipsis = () => {
+    const s = document.createElement("span");
+    s.className = "ellipsis";
+    s.textContent = "…";
+    pager.appendChild(s);
+  };
+
+  btn("«", lib.page - 1, { disabled: lib.page === 1 });
+  // Window of pages around the current one, always showing first/last
+  const windowPages = new Set([1, pages]);
+  for (let p = lib.page - 2; p <= lib.page + 2; p++) {
+    if (p >= 1 && p <= pages) windowPages.add(p);
+  }
+  let prev = 0;
+  for (const p of [...windowPages].sort((a, b) => a - b)) {
+    if (p - prev > 1) ellipsis();
+    btn(String(p), p, { current: p === lib.page });
+    prev = p;
+  }
+  btn("»", lib.page + 1, { disabled: lib.page === pages });
+
+  const totalSpan = document.createElement("span");
+  totalSpan.className = "total";
+  totalSpan.textContent = `${lib.page}/${pages} · ${total}`;
+  pager.appendChild(totalSpan);
 }
 
 async function loadDuplicates() {
   $("#libGrid").innerHTML = "";
-  $("#libMore").classList.add("hidden");
+
   let data;
   try {
     data = await api.get("/api/library/duplicates");
@@ -674,7 +730,7 @@ function starSpan(rating, onSet) {
 
 async function loadTrash() {
   $("#libGrid").innerHTML = "";
-  $("#libMore").classList.add("hidden");
+
   let data;
   try { data = await api.get("/api/trash"); }
   catch (e) { toast(e.message, true); return; }
@@ -809,7 +865,12 @@ async function openLibraryDetail(path) {
 
 $("#libTool").onchange = $("#libRating").onchange = $("#libQuality").onchange =
 $("#libGroup").onchange = $("#libSort").onchange = () => loadLibrary(true);
-$("#libMore").onclick = () => loadLibrary(false);
+$("#libPageSize").value = String(lib.size);
+$("#libPageSize").onchange = (e) => {
+  lib.size = +e.target.value;
+  localStorage.setItem("gensight.pageSize", lib.size);
+  loadLibrary(true);
+};
 $("#libFav").onclick = () => {
   $("#libFav").classList.toggle("on");
   loadLibrary(true);
