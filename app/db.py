@@ -313,11 +313,15 @@ def similar_images(path: str, max_distance: int = 10, limit: int = 50) -> list[d
 
 
 def duplicate_groups(limit: int = 100) -> list[dict]:
-    """Groups of images sharing an identical perceptual hash."""
+    """Groups of images sharing an identical perceptual hash.
+
+    The all-zero hash is excluded: every flat/gradient image collapses
+    to it, which would lump unrelated solid-color images together."""
     conn = connect()
     hashes = conn.execute(
         """SELECT phash, COUNT(*) c FROM images
-           WHERE phash IS NOT NULL GROUP BY phash
+           WHERE phash IS NOT NULL AND phash != '0000000000000000'
+           GROUP BY phash
            HAVING c > 1 ORDER BY c DESC LIMIT ?""",
         (limit,),
     ).fetchall()
@@ -348,6 +352,16 @@ def summary() -> dict:
     ).fetchone()["c"]
     return {"total": total, "by_tool": by_tool, "favorites": favorites,
             "tagged": tagged}
+
+
+def cleanup_missing() -> int:
+    """Drop library rows whose files no longer exist on disk."""
+    conn = connect()
+    rows = conn.execute("SELECT path FROM images").fetchall()
+    gone = [(r["path"],) for r in rows if not Path(r["path"]).exists()]
+    with conn:
+        conn.executemany("DELETE FROM images WHERE path=?", gone)
+    return len(gone)
 
 
 def group_names() -> list[str]:

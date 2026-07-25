@@ -403,6 +403,13 @@ async function doLogin() {
   }
 }
 
+$("#cleanupMissing").onclick = async () => {
+  try {
+    const r = await api.send("POST", "/api/library/cleanup");
+    toast(`${t("settings.cleanupDone", "제거된 항목")}: ${r.removed}`);
+  } catch (e) { toast(e.message, true); }
+};
+
 $("#addDir").onclick = async () => {
   const path = $("#newDir").value.trim();
   if (!path) return;

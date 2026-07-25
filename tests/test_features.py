@@ -121,9 +121,72 @@ def test_trash_restore_purge(tmp_path, monkeypatch):
     assert not Path(entry["trash_path"]).exists()
 
 
+def test_trash_thumbnail_is_servable(tmp_path, monkeypatch):
+    """Regression: trashed files must remain viewable in the trash UI."""
+    client = _client(tmp_path, monkeypatch)
+    p = tmp_path / "tv.png"
+    Image.new("RGB", (64, 64), "teal").save(p)
+    db.upsert_image(_item(p))
+    client.post("/api/trash", json={"path": str(p)})
+    entry = client.get("/api/trash").json()["items"][0]
+    r = client.get("/api/image", params={"path": entry["trash_path"], "thumb": "true"})
+    assert r.status_code == 200
+
+
+def test_analyze_upload_joins_library(tmp_path, monkeypatch):
+    """Regression: drag & drop uploads must be persisted like scans."""
+    import io as _io
+    from PIL import PngImagePlugin as _png
+
+    client = _client(tmp_path, monkeypatch)
+    img = Image.new("RGB", (64, 64), "olive")
+    info = _png.PngInfo()
+    info.add_text("parameters", "uploaded cat\nSteps: 20, Sampler: Euler a")
+    buf = _io.BytesIO()
+    img.save(buf, "PNG", pnginfo=info)
+
+    r = client.post("/api/analyze",
+                    files={"file": ("up.png", buf.getvalue(), "image/png")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["phash"]  # hashed like scanned files
+    data = client.get("/api/library", params={"q": "uploaded cat"}).json()
+    assert data["total"] == 1
+    assert data["items"][0]["file"] == body["file"]
+
+
 def test_trash_unknown_path(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     assert client.post("/api/trash", json={"path": "/no/such.png"}).status_code == 404
+
+
+def test_trash_missing_file_drops_stale_row(tmp_path, monkeypatch):
+    """A file deleted outside the app must not create a phantom trash
+    entry — the stale library row is removed instead."""
+    client = _client(tmp_path, monkeypatch)
+    p = tmp_path / "ghost.png"
+    Image.new("RGB", (32, 32)).save(p)
+    db.upsert_image(_item(p))
+    p.unlink()
+
+    r = client.post("/api/trash", json={"path": str(p)})
+    assert r.status_code == 404
+    assert db.get_image(str(p)) is None
+    assert client.get("/api/trash").json()["items"] == []
+
+
+def test_library_cleanup_missing(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    keep = tmp_path / "keep.png"
+    gone = tmp_path / "gone.png"
+    for f in (keep, gone):
+        Image.new("RGB", (32, 32)).save(f)
+        db.upsert_image(_item(f))
+    gone.unlink()
+
+    r = client.post("/api/library/cleanup")
+    assert r.json()["removed"] == 1
+    assert db.get_image(str(keep)) and db.get_image(str(gone)) is None
 
 
 # ---------------------------------------------------------------- organize

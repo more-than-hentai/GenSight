@@ -102,6 +102,12 @@ def library_summary():
     return db.summary()
 
 
+@router.post("/library/cleanup")
+def library_cleanup():
+    """Remove rows for files deleted/moved outside the app."""
+    return {"removed": db.cleanup_missing()}
+
+
 @router.get("/stats/prompts")
 def prompt_stats(top: int = 50):
     return stats_mod.collect(top=max(1, min(top, 200)))

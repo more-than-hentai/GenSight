@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .. import config, metadata
-from ..scanner import manager
+from ..scanner import manager, process_and_store
 
 router = APIRouter(prefix="/api", tags=["scan"])
 
@@ -62,7 +62,9 @@ async def analyze_upload(file: UploadFile):
     dest = config.UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
     dest.write_bytes(data)
 
-    result = metadata.extract(dest)
+    # Persist into the library like scanned files (searchable, has
+    # phash for similarity, shows up with rating/favorite controls)
+    result = process_and_store(dest)
     result["uploaded"] = True
     result["original_name"] = safe_name
     return result

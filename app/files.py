@@ -31,6 +31,8 @@ def allowed_roots(extra_job_dirs: list[str] | None = None) -> list[Path]:
     for d in extra_job_dirs or []:
         roots.append(Path(d).resolve())
     roots.append(Path(config.UPLOAD_DIR).resolve())
+    # Trashed files must stay viewable in the recycle-bin UI
+    roots.append(trash_dir().resolve())
     return roots
 
 
@@ -53,10 +55,16 @@ def trash_image(path: str) -> dict:
     item = db.get_image(str(p))
     if item is None:
         raise FileNotFoundError(f"not in library: {p}")
+    if not p.exists():
+        # File vanished outside the app — drop the stale row instead of
+        # creating a phantom trash entry.
+        db.delete_image_row(str(p))
+        raise FileNotFoundError(
+            f"file missing on disk (stale library entry removed): {p}"
+        )
     trash_dir().mkdir(parents=True, exist_ok=True)
     dest = trash_dir() / f"{uuid.uuid4().hex[:8]}_{p.name}"
-    if p.exists():
-        shutil.move(str(p), dest)
+    shutil.move(str(p), dest)
     db.delete_image_row(str(p))
     return db.trash_add(str(p), str(dest), item)
 

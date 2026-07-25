@@ -71,13 +71,13 @@ def test_query_filters(tmp_path, monkeypatch):
 
 def test_similar_and_duplicates(tmp_path, monkeypatch):
     _use_tmp_data(tmp_path, monkeypatch)
-    # Two visually identical images, one different
+    # Two visually identical images, one different. Solid-color images
+    # dhash to all zeros (excluded from dupe groups by design), so use
+    # explicit non-zero hashes here.
     p1 = _png(tmp_path, "s1.png", "white")
     p2 = _png(tmp_path, "s2.png", "white")
-    h = imghash.dhash(p1)
-    db.upsert_image(_fake_item(p1), phash=h)
-    db.upsert_image(_fake_item(p2), phash=imghash.dhash(p2))
-    # Solid-color images all dhash to 0, so give s3 a distinct fake hash
+    db.upsert_image(_fake_item(p1), phash="a5a5a5a5a5a5a5a5")
+    db.upsert_image(_fake_item(p2), phash="a5a5a5a5a5a5a5a5")
     db.upsert_image(_fake_item(_png(tmp_path, "s3.png", "black")),
                     phash="ffffffffffffffff")
 
@@ -87,6 +87,13 @@ def test_similar_and_duplicates(tmp_path, monkeypatch):
 
     dupes = db.duplicate_groups()
     assert len(dupes) == 1 and dupes[0]["count"] == 2
+
+    # All-zero hashes never form a duplicate group
+    z1 = _png(tmp_path, "z1.png", "gray")
+    z2 = _png(tmp_path, "z2.png", "gray")
+    db.upsert_image(_fake_item(z1), phash="0000000000000000")
+    db.upsert_image(_fake_item(z2), phash="0000000000000000")
+    assert len(db.duplicate_groups()) == 1
 
 
 def test_groups_apply(tmp_path, monkeypatch):
