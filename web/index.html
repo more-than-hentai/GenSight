@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenSight</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">🔎 GenSight</div>
+  <nav>
+    <button class="tab active" data-tab="scan" data-i18n="tab.scan">스캔</button>
+    <button class="tab" data-tab="results" data-i18n="tab.results">결과</button>
+    <button class="tab" data-tab="settings" data-i18n="tab.settings">설정</button>
+  </nav>
+  <select id="langSelect" title="Language">
+    <option value="ko">한국어</option>
+    <option value="en">English</option>
+    <option value="ja">日本語</option>
+  </select>
+</header>
+
+<main>
+  <!-- ============================ Scan tab -->
+  <section id="tab-scan" class="panel active">
+    <div class="card">
+      <h2 data-i18n="scan.title">새 스캔</h2>
+      <div class="row">
+        <label data-i18n="scan.directory">디렉토리</label>
+        <select id="scanDir"></select>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="scanRecursive" checked>
+          <span data-i18n="scan.recursive">하위 폴더 포함</span></label>
+        <label data-i18n="scan.workers">추출 워커 수</label>
+        <input type="number" id="scanWorkers" min="1" max="32" value="4" class="num">
+        <button id="scanStart" class="primary" data-i18n="scan.start">스캔 시작</button>
+      </div>
+      <p class="hint" data-i18n="scan.hint">
+        이미지가 매우 많은 디렉토리는 워커 수를 조절해 시스템 부하를 제어할 수 있습니다.
+        디렉토리는 설정 탭에서 먼저 등록해야 합니다.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="scan.jobs">작업 목록</h2>
+      <div id="jobList" class="job-list"></div>
+    </div>
+  </section>
+
+  <!-- ============================ Results tab -->
+  <section id="tab-results" class="panel">
+    <div class="card">
+      <div class="row wrap">
+        <select id="resultJob"></select>
+        <input type="search" id="resultSearch" data-i18n-ph="results.search"
+               placeholder="프롬프트/파일명/모델 검색">
+        <select id="resultTool">
+          <option value="" data-i18n="results.allTools">전체 도구</option>
+          <option value="a1111">A1111/Forge</option>
+          <option value="comfyui">ComfyUI</option>
+          <option value="novelai">NovelAI</option>
+          <option value="unknown" data-i18n="results.unknown">메타데이터 없음</option>
+        </select>
+        <span class="spacer"></span>
+        <button id="exportJson">JSON ⬇</button>
+        <button id="exportCsv">CSV ⬇</button>
+      </div>
+      <div id="resultCount" class="hint"></div>
+    </div>
+    <div id="resultGrid" class="grid"></div>
+    <div class="row center">
+      <button id="loadMore" class="hidden" data-i18n="results.more">더 보기</button>
+    </div>
+  </section>
+
+  <!-- ============================ Settings tab -->
+  <section id="tab-settings" class="panel">
+    <div class="card">
+      <h2 data-i18n="settings.dirs">스캔 디렉토리</h2>
+      <div class="row">
+        <input type="text" id="newDir" data-i18n-ph="settings.dirPlaceholder"
+               placeholder="/path/to/images" class="grow">
+        <button id="addDir" class="primary" data-i18n="settings.add">추가</button>
+      </div>
+      <ul id="dirList" class="dir-list"></ul>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.workers">워커 / 동시성</h2>
+      <div class="settings-grid">
+        <label data-i18n="settings.scanWorkers">스캔 워커</label>
+        <input type="number" id="setScanWorkers" min="1" max="32" class="num">
+        <label data-i18n="settings.extractWorkers">추출 워커 (기본값)</label>
+        <input type="number" id="setExtractWorkers" min="1" max="32" class="num">
+        <label data-i18n="settings.thumbWorkers">썸네일 워커</label>
+        <input type="number" id="setThumbWorkers" min="1" max="16" class="num">
+        <label data-i18n="settings.maxJobs">동시 작업 수</label>
+        <input type="number" id="setMaxJobs" min="1" max="8" class="num">
+      </div>
+      <p class="hint" id="cpuInfo"></p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.gpus">GPU (ML 분석용)</h2>
+      <div id="gpuList"></div>
+      <div class="settings-grid">
+        <label data-i18n="settings.jobsPerGpu">GPU당 동시 작업</label>
+        <input type="number" id="setJobsPerGpu" min="1" max="8" class="num">
+      </div>
+      <p class="hint" data-i18n="settings.gpuHint">
+        선택한 GPU는 추후 ML 이미지 분석(카테고리/의상/배경/품질 판별) 작업에 사용됩니다.
+      </p>
+    </div>
+
+    <div class="row">
+      <button id="saveSettings" class="primary" data-i18n="settings.save">설정 저장</button>
+      <span id="saveStatus" class="hint"></span>
+    </div>
+  </section>
+</main>
+
+<!-- ============================ Detail modal -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="modalTitle"></h3>
+      <button id="modalClose" class="ghost">✕</button>
+    </div>
+    <div class="modal-body">
+      <img id="modalImg" alt="">
+      <div class="modal-meta">
+        <div class="copy-bar">
+          <span data-i18n="detail.copyAs">복사 형식:</span>
+          <button data-copy="json">JSON</button>
+          <button data-copy="markdown">Markdown</button>
+          <button data-copy="bbcode">BBCode</button>
+          <button data-copy="prompt" data-i18n="detail.promptOnly">프롬프트만</button>
+        </div>
+        <pre id="modalMeta"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+services:
+  gensight:
+    build: .
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./data:/opt/gensight/data
+      # Mount your image directories read-only, then register the
+      # container-side paths (/images/...) in the web UI settings.
+      # - /path/to/your/images:/images/set1:ro
+    restart: unless-stopped
+    # For future GPU-based ML analysis, uncomment (requires
+    # nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

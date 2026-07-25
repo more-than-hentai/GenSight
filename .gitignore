@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# App data (settings, thumbnail cache)
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
