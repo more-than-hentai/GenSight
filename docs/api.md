@@ -61,7 +61,26 @@ Base URL: `http://127.0.0.1:8090`
 | POST | `/api/tagger/run` | 태깅 시작 `{"limit"?}` (ML 미설치 시 409) |
 | POST | `/api/tagger/cancel` | 태깅 취소 |
 
-MCP 서버는 [mcp.md](mcp.md) 참조.
+## 품질 분석 / 휴지통 / 정리 / 인증
+
+| Method | Path | 설명 |
+|---|---|---|
+| GET | `/api/quality/status` | 품질 분석 대기 수/진행 상태 |
+| POST | `/api/quality/run` | 휴리스틱 품질 분석 시작 `{"limit"?}` |
+| POST | `/api/quality/cancel` | 분석 취소 |
+| POST | `/api/trash` | 파일을 휴지통으로 이동 `{"path"}` |
+| GET | `/api/trash` | 휴지통 목록 |
+| POST | `/api/trash/{id}/restore` | 복구 (평점/즐겨찾기/태그 유지) |
+| DELETE | `/api/trash/{id}` | 개별 영구 삭제 |
+| DELETE | `/api/trash` | 휴지통 비우기 (영구 삭제) |
+| POST | `/api/organize` | 템플릿 기반 파일 이동 `{"target_root","template","dry_run",필터...}` |
+| GET | `/api/auth/status` | 인증 활성/로그인 여부 |
+| POST | `/api/auth/login` `logout` `setup` `disable` | 세션 관리 (scrypt 해시) |
+
+라이브러리 검색에 `quality=` 필터(issues/low/unrated), `sort=quality` 추가.
+인증 활성화 시 `/api/auth/*` 외 모든 `/api/*`는 세션 쿠키 필요(401).
+
+MCP 서버는 [mcp.md](mcp.md), 구조/프레임워크 검토는 [architecture.md](architecture.md) 참조.
 
 ## 결과 객체
 

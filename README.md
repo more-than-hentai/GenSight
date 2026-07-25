@@ -112,9 +112,11 @@ data/           Runtime data: settings, thumbnail cache (gitignored)
 - [x] 평점 / 즐겨찾기 / 그룹 자동 분류
 - [x] WD Tagger 태깅 (멀티 GPU 분산, 선택 설치)
 - [x] MCP 서버 (Claude Code 연동)
-- [ ] 품질 판별: 저품질·신체 파손(anatomy broken) 이미지 검출
-- [ ] 휴지통 / 파일 정리 (메타데이터 기반 이동·이름 변경)
-- [ ] 사용자 인증 (원격 접근용)
+- [x] 품질 판별: 휴리스틱(블러/노출/대비/해상도) + 생성 설정 검사
+- [x] 휴지통(복구 지원) / 템플릿 기반 파일 정리
+- [x] 사용자 인증 (scrypt + 세션, 선택 활성화)
+- [ ] 신체 파손(anatomy) 검출 — ML detector 플러그인 ([docs/architecture.md](docs/architecture.md) 참조)
+- [ ] 프론트엔드 ESM 모듈 분리 → (필요 시) Vue 3 + Vite
 
 ## Tests
 

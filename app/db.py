@@ -60,7 +60,30 @@ CREATE TABLE IF NOT EXISTS groups (
   is_regex INTEGER NOT NULL DEFAULT 0,
   target   TEXT NOT NULL DEFAULT 'prompt'
 );
+
+CREATE TABLE IF NOT EXISTS trash (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  original_path TEXT NOT NULL,
+  trash_path    TEXT NOT NULL,
+  item          TEXT NOT NULL,
+  trashed_at    REAL NOT NULL
+);
 """
+
+# Columns added after the initial release; applied via ALTER TABLE so
+# existing databases upgrade in place.
+_MIGRATIONS = [
+    ("images", "quality_score", "ALTER TABLE images ADD COLUMN quality_score REAL"),
+    ("images", "quality_issues", "ALTER TABLE images ADD COLUMN quality_issues TEXT"),
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, ddl in _MIGRATIONS:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            conn.execute(ddl)
+    conn.commit()
 
 
 def _db_path() -> Path:
@@ -87,6 +110,7 @@ def connect() -> sqlite3.Connection:
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
                     conn.executescript(SCHEMA)
+                    _migrate(conn)
                     break
                 except sqlite3.OperationalError:
                     if attempt == 4:
@@ -107,6 +131,11 @@ def _row_to_item(row: sqlite3.Row) -> dict[str, Any]:
             d["tags"] = json.loads(d["tags"])
         except json.JSONDecodeError:
             d["tags"] = []
+    if d.get("quality_issues"):
+        try:
+            d["quality_issues"] = json.loads(d["quality_issues"])
+        except json.JSONDecodeError:
+            d["quality_issues"] = []
     # Keep the shape the frontend already understands
     d["file"] = d["path"]
     d["favorite"] = bool(d["favorite"])
@@ -176,11 +205,18 @@ def query_images(
     favorite: bool | None = None,
     min_rating: int = 0,
     group: str = "",
+    quality: str = "",
     sort: str = "recent",
     offset: int = 0,
     limit: int = 60,
 ) -> tuple[int, list[dict]]:
     where, args = [], []
+    if quality == "issues":
+        where.append("quality_issues IS NOT NULL AND quality_issues != '[]'")
+    elif quality == "low":
+        where.append("quality_score IS NOT NULL AND quality_score < 50")
+    elif quality == "unrated":
+        where.append("quality_score IS NULL")
     if q:
         like = f"%{q}%"
         where.append(
@@ -206,6 +242,7 @@ def query_images(
         "oldest": "scanned_at ASC",
         "rating": "rating DESC, scanned_at DESC",
         "name": "filename COLLATE NOCASE ASC",
+        "quality": "quality_score ASC NULLS LAST",
     }.get(sort, "scanned_at DESC")
     conn = connect()
     total = conn.execute(f"SELECT COUNT(*) c FROM images {w}", args).fetchone()["c"]
@@ -319,6 +356,101 @@ def group_names() -> list[str]:
         " ORDER BY group_name"
     ).fetchall()
     return [r["group_name"] for r in rows]
+
+
+def set_quality(path: str, score: float, issues: list[str]) -> None:
+    conn = connect()
+    with conn:
+        conn.execute(
+            "UPDATE images SET quality_score=?, quality_issues=? WHERE path=?",
+            (score, json.dumps(issues), path),
+        )
+
+
+def quality_pending_paths(limit: int | None = None) -> list[str]:
+    sql = ("SELECT path FROM images WHERE quality_score IS NULL"
+           " AND error IS NULL")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return [r["path"] for r in connect().execute(sql).fetchall()]
+
+
+def update_path(old: str, new: str) -> None:
+    """Reflect a file move in the library (organize feature)."""
+    conn = connect()
+    with conn:
+        conn.execute(
+            "UPDATE images SET path=?, filename=? WHERE path=?",
+            (new, Path(new).name, old),
+        )
+
+
+def delete_image_row(path: str) -> dict | None:
+    item = get_image(path)
+    if item:
+        conn = connect()
+        with conn:
+            conn.execute("DELETE FROM images WHERE path=?", (path,))
+    return item
+
+
+# ---------------------------------------------------------------- trash
+
+
+def trash_add(original: str, trash_path: str, item: dict) -> dict:
+    conn = connect()
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO trash(original_path, trash_path, item, trashed_at)"
+            " VALUES (?,?,?,?)",
+            (original, trash_path,
+             json.dumps(item, ensure_ascii=False, default=str), time.time()),
+        )
+    return {"id": cur.lastrowid, "original_path": original,
+            "trash_path": trash_path}
+
+
+def trash_list() -> list[dict]:
+    rows = connect().execute(
+        "SELECT id, original_path, trash_path, trashed_at FROM trash"
+        " ORDER BY trashed_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def trash_get(trash_id: int) -> dict | None:
+    row = connect().execute(
+        "SELECT * FROM trash WHERE id=?", (trash_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["item"] = json.loads(d["item"])
+    except json.JSONDecodeError:
+        d["item"] = {}
+    return d
+
+
+def trash_remove(trash_id: int) -> None:
+    conn = connect()
+    with conn:
+        conn.execute("DELETE FROM trash WHERE id=?", (trash_id,))
+
+
+def restore_image_row(item: dict, new_path: str) -> None:
+    """Re-insert a trashed row (path may differ if the original was taken)."""
+    item = dict(item)
+    item["file"] = new_path
+    item["filename"] = Path(new_path).name
+    upsert_image(item, item.get("phash"))
+    set_meta(new_path, rating=item.get("rating"),
+             favorite=item.get("favorite"), group_name=item.get("group_name"))
+    if item.get("tags"):
+        set_tags(new_path, item["tags"])
+    if item.get("quality_score") is not None:
+        set_quality(new_path, item["quality_score"],
+                    item.get("quality_issues") or [])
 
 
 # ---------------------------------------------------------------- watches

@@ -87,13 +87,21 @@
         <select id="libGroup">
           <option value="" data-i18n="lib.allGroups">전체 그룹</option>
         </select>
+        <select id="libQuality">
+          <option value="" data-i18n="lib.allQuality">전체 품질</option>
+          <option value="issues" data-i18n="lib.hasIssues">이슈 있음</option>
+          <option value="low" data-i18n="lib.lowQuality">저품질 (&lt;50)</option>
+          <option value="unrated" data-i18n="lib.unrated">미분석</option>
+        </select>
         <select id="libSort">
           <option value="recent" data-i18n="lib.sortRecent">최신순</option>
           <option value="oldest" data-i18n="lib.sortOldest">오래된순</option>
           <option value="rating" data-i18n="lib.sortRating">평점순</option>
           <option value="name" data-i18n="lib.sortName">이름순</option>
+          <option value="quality" data-i18n="lib.sortQuality">품질 낮은순</option>
         </select>
         <button id="libDupes" data-i18n="lib.dupes">중복 보기</button>
+        <button id="libTrash" data-i18n="lib.trash">휴지통</button>
         <span class="spacer"></span>
         <span id="libCount" class="hint"></span>
       </div>
@@ -227,6 +235,58 @@
     </div>
 
     <div class="card">
+      <h2 data-i18n="settings.quality">품질 분석</h2>
+      <div class="row">
+        <button id="qualityRun" class="primary" data-i18n="settings.qualityRun">품질 분석 실행</button>
+        <button id="qualityCancel" data-i18n="scan.cancel">취소</button>
+        <span id="qualityStatus" class="hint"></span>
+      </div>
+      <p class="hint" data-i18n="settings.qualityHint">
+        블러/노출/대비/저해상도 휴리스틱과 생성 설정(낮은 Steps, 극단적 CFG) 기반으로
+        0–100 점수와 이슈를 부여합니다. 신체 파손 검출(ML)은 로드맵에 있습니다.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.organize">파일 정리</h2>
+      <div class="row wrap">
+        <input type="text" id="orgRoot" class="grow"
+               data-i18n-ph="settings.orgRoot" placeholder="대상 루트 디렉토리">
+        <input type="text" id="orgTemplate" value="{model}/{date}"
+               title="{model} {tool} {date} {group} {sampler}">
+        <button id="orgPreview" data-i18n="settings.orgPreview">미리보기</button>
+        <button id="orgApply" class="primary" data-i18n="settings.orgApply">이동 실행</button>
+      </div>
+      <p class="hint" data-i18n="settings.orgHint">
+        라이브러리 탭의 현재 필터(검색/도구/그룹/품질 등)에 해당하는 파일을
+        템플릿 경로로 이동합니다. 변수: {model} {tool} {date} {group} {sampler}
+      </p>
+      <pre id="orgResult" class="hidden org-result"></pre>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.auth">인증</h2>
+      <div id="authDisabledBox">
+        <div class="row wrap">
+          <input type="text" id="authUser" data-i18n-ph="auth.username" placeholder="사용자명" autocomplete="username">
+          <input type="password" id="authPass" data-i18n-ph="auth.password" placeholder="비밀번호" autocomplete="new-password">
+          <button id="authEnable" class="primary" data-i18n="settings.authEnable">인증 활성화</button>
+        </div>
+      </div>
+      <div id="authEnabledBox" class="hidden">
+        <div class="row wrap">
+          <span id="authInfo"></span>
+          <input type="password" id="authDisablePass" data-i18n-ph="auth.password" placeholder="비밀번호">
+          <button id="authDisable" data-i18n="settings.authDisable">인증 해제</button>
+        </div>
+      </div>
+      <p class="hint" data-i18n="settings.authHint">
+        활성화하면 모든 API에 로그인이 필요합니다 (localhost 개인 사용 시에는 불필요).
+        비밀번호는 scrypt로 해시되어 저장됩니다.
+      </p>
+    </div>
+
+    <div class="card">
       <h2 data-i18n="settings.tagger">WD Tagger 자동 태깅</h2>
       <div class="row">
         <button id="taggerRun" class="primary" data-i18n="settings.taggerRun">태깅 실행</button>
@@ -296,6 +356,19 @@
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ============================ Login overlay -->
+<div id="loginOverlay" class="modal hidden">
+  <div class="login-box">
+    <h2>🔎 GenSight</h2>
+    <input type="text" id="loginUser" data-i18n-ph="auth.username"
+           placeholder="사용자명" autocomplete="username">
+    <input type="password" id="loginPass" data-i18n-ph="auth.password"
+           placeholder="비밀번호" autocomplete="current-password">
+    <button id="loginBtn" class="primary" data-i18n="auth.login">로그인</button>
+    <p id="loginError" class="hint hidden"></p>
   </div>
 </div>
 

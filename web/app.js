@@ -109,6 +109,8 @@ async function renderSettings() {
   renderWatches();
   renderGroups();
   renderTagger();
+  renderQuality();
+  renderAuth();
 
   try {
     const g = await api.get("/api/gpus");
@@ -261,6 +263,130 @@ $("#taggerCancel").onclick = async () => {
   try { await api.send("POST", "/api/tagger/cancel"); } catch {}
   renderTagger();
 };
+
+let qualityTimer;
+async function renderQuality() {
+  clearTimeout(qualityTimer);
+  let s;
+  try { s = await api.get("/api/quality/status"); } catch { return; }
+  let text;
+  if (s.job && s.job.status === "running") {
+    text = `${t("status.extracting", "추출중")} ${s.job.processed}/${s.job.total}`;
+    qualityTimer = setTimeout(renderQuality, 1500);
+  } else {
+    text = `${t("settings.qualityPending", "미분석")}: ${s.pending}` +
+      (s.job ? ` · ${t("status." + s.job.status, s.job.status)}` : "");
+  }
+  $("#qualityStatus").textContent = text;
+}
+
+$("#qualityRun").onclick = async () => {
+  try {
+    await api.send("POST", "/api/quality/run", {});
+    renderQuality();
+  } catch (e) { toast(e.message, true); }
+};
+$("#qualityCancel").onclick = async () => {
+  try { await api.send("POST", "/api/quality/cancel"); } catch {}
+  renderQuality();
+};
+
+/* -------- organize -------- */
+
+async function runOrganize(dryRun) {
+  const target_root = $("#orgRoot").value.trim();
+  if (!target_root) { toast(t("settings.orgNeedRoot", "대상 디렉토리를 입력하세요"), true); return; }
+  if (!dryRun && !confirm(t("settings.orgConfirm", "미리보기 내용대로 파일을 이동할까요?"))) return;
+  try {
+    const r = await api.send("POST", "/api/organize", {
+      target_root,
+      template: $("#orgTemplate").value.trim() || "{model}/{date}",
+      dry_run: dryRun,
+      ...libFilters(),
+    });
+    const box = $("#orgResult");
+    box.classList.remove("hidden");
+    if (r.dry_run) {
+      const lines = r.moves.map((m) => `${m.from}\n  → ${m.to}`).join("\n");
+      box.textContent =
+        `${t("settings.orgPlanned", "이동 예정")}: ${r.count}\n\n${lines}` +
+        (r.count > r.moves.length ? `\n... (+${r.count - r.moves.length})` : "");
+    } else {
+      box.textContent = `${t("settings.orgMoved", "이동 완료")}: ${r.count}` +
+        (r.errors.length ? `\n${t("status.error", "오류")}: ${JSON.stringify(r.errors, null, 2)}` : "");
+      toast(`${t("settings.orgMoved", "이동 완료")}: ${r.count}`);
+    }
+  } catch (e) { toast(e.message, true); }
+}
+$("#orgPreview").onclick = () => runOrganize(true);
+$("#orgApply").onclick = () => runOrganize(false);
+
+/* -------- auth -------- */
+
+async function renderAuth() {
+  let s;
+  try { s = await api.get("/api/auth/status"); } catch { return; }
+  $("#authDisabledBox").classList.toggle("hidden", s.enabled);
+  $("#authEnabledBox").classList.toggle("hidden", !s.enabled);
+  if (s.enabled) {
+    $("#authInfo").textContent =
+      `${t("settings.authOn", "활성화됨")} — ${s.username}`;
+  }
+}
+
+$("#authEnable").onclick = async () => {
+  const username = $("#authUser").value.trim();
+  const password = $("#authPass").value;
+  if (!username || password.length < 4) {
+    toast(t("auth.weak", "사용자명과 4자 이상 비밀번호가 필요합니다"), true);
+    return;
+  }
+  try {
+    await api.send("POST", "/api/auth/setup", { username, password });
+    $("#authPass").value = "";
+    toast(t("settings.authOn", "활성화됨"));
+    renderAuth();
+  } catch (e) { toast(e.message, true); }
+};
+
+$("#authDisable").onclick = async () => {
+  try {
+    await api.send("POST", "/api/auth/disable",
+      { password: $("#authDisablePass").value });
+    $("#authDisablePass").value = "";
+    toast(t("settings.authOff", "인증이 해제되었습니다"));
+    renderAuth();
+  } catch (e) { toast(e.message, true); }
+};
+
+/* -------- login overlay -------- */
+
+async function checkLogin() {
+  try {
+    const s = await api.get("/api/auth/status");
+    const need = s.enabled && !s.authenticated;
+    $("#loginOverlay").classList.toggle("hidden", !need);
+    return !need;
+  } catch { return true; }
+}
+
+$("#loginBtn").onclick = doLogin;
+$("#loginPass").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+async function doLogin() {
+  try {
+    await api.send("POST", "/api/auth/login", {
+      username: $("#loginUser").value.trim(),
+      password: $("#loginPass").value,
+    });
+    location.reload();
+  } catch (e) {
+    const el = $("#loginError");
+    el.textContent = t("auth.failed", "로그인 실패");
+    el.classList.remove("hidden");
+  }
+}
 
 $("#addDir").onclick = async () => {
   const path = $("#newDir").value.trim();
@@ -512,23 +638,33 @@ function exportJob(format) {
 
 /* ---------------------------------------------------------- library */
 
-const lib = { offset: 0, dupes: false };
+const lib = { offset: 0, dupes: false, trash: false };
 
-function libParams() {
-  const p = new URLSearchParams({
+function libFilters() {
+  const f = {
     q: $("#libSearch").value,
     tool: $("#libTool").value,
-    min_rating: $("#libRating").value,
+    min_rating: +$("#libRating").value,
     group: $("#libGroup").value,
-    sort: $("#libSort").value,
-    offset: lib.offset,
-    limit: state.pageSize,
+    quality: $("#libQuality").value,
+  };
+  if ($("#libFav").classList.contains("on")) f.favorite = true;
+  return f;
+}
+
+function libParams() {
+  const f = libFilters();
+  const p = new URLSearchParams({
+    q: f.q, tool: f.tool, min_rating: f.min_rating, group: f.group,
+    quality: f.quality, sort: $("#libSort").value,
+    offset: lib.offset, limit: state.pageSize,
   });
-  if ($("#libFav").classList.contains("on")) p.set("favorite", "true");
+  if (f.favorite) p.set("favorite", "true");
   return p;
 }
 
 async function loadLibrary(reset) {
+  if (lib.trash) { loadTrash(); return; }
   if (lib.dupes) { loadDuplicates(); return; }
   if (reset) { lib.offset = 0; $("#libGrid").innerHTML = ""; }
   let data;
@@ -587,6 +723,76 @@ function starSpan(rating, onSet) {
   return span;
 }
 
+async function loadTrash() {
+  $("#libGrid").innerHTML = "";
+  $("#libMore").classList.add("hidden");
+  let data;
+  try { data = await api.get("/api/trash"); }
+  catch (e) { toast(e.message, true); return; }
+  $("#libCount").textContent = t("lib.trash", "휴지통") + `: ${data.items.length}`;
+  const grid = $("#libGrid");
+  if (!data.items.length) {
+    grid.innerHTML = `<p class="hint">${t("lib.trashEmpty", "휴지통이 비어 있습니다.")}</p>`;
+    return;
+  }
+  const head = document.createElement("div");
+  head.className = "dupe-head";
+  const emptyBtn = document.createElement("button");
+  emptyBtn.textContent = t("lib.emptyTrash", "휴지통 비우기 (영구 삭제)");
+  emptyBtn.onclick = async () => {
+    if (!confirm(t("lib.emptyConfirm", "휴지통의 모든 파일을 영구 삭제할까요?"))) return;
+    try {
+      const r = await api.send("DELETE", "/api/trash");
+      toast(`${t("lib.purged", "영구 삭제됨")}: ${r.purged}`);
+      loadTrash();
+    } catch (e) { toast(e.message, true); }
+  };
+  head.appendChild(emptyBtn);
+  grid.appendChild(head);
+  for (const it of data.items) {
+    const el = document.createElement("div");
+    el.className = "item";
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
+    img.src = `/api/image?path=${encodeURIComponent(it.trash_path)}&thumb=true`;
+    const body = document.createElement("div");
+    body.className = "body";
+    body.innerHTML = `<div class="name">${escapeHtml(it.original_path)}</div>`;
+    const row = document.createElement("div");
+    row.className = "overlay";
+    const restore = document.createElement("button");
+    restore.textContent = t("lib.restore", "복구");
+    restore.onclick = async () => {
+      try {
+        await api.send("POST", `/api/trash/${it.id}/restore`);
+        toast(t("lib.restored", "복구되었습니다"));
+        loadTrash();
+      } catch (e) { toast(e.message, true); }
+    };
+    const purge = document.createElement("button");
+    purge.textContent = t("lib.purge", "영구 삭제");
+    purge.onclick = async () => {
+      if (!confirm(t("lib.purgeConfirm", "이 파일을 영구 삭제할까요?"))) return;
+      try {
+        await api.send("DELETE", `/api/trash/${it.id}`);
+        loadTrash();
+      } catch (e) { toast(e.message, true); }
+    };
+    row.append(restore, purge);
+    body.appendChild(row);
+    el.append(img, body);
+    grid.appendChild(el);
+  }
+}
+
+function qualityBadge(r) {
+  if (r.quality_score === null || r.quality_score === undefined) return "";
+  const s = Math.round(r.quality_score);
+  const cls = s >= 80 ? "good" : s >= 50 ? "mid" : "bad";
+  return `<span class="q-badge ${cls}" title="${(r.quality_issues || []).join(", ")}">Q${s}</span>`;
+}
+
 function renderLibItem(r) {
   const el = document.createElement("div");
   el.className = "item";
@@ -602,6 +808,7 @@ function renderLibItem(r) {
     <div class="tools">
       <span class="tool-badge ${r.tool}">${r.tool}</span>
       ${r.group_name ? `<span class="tool-badge">${escapeHtml(r.group_name)}</span>` : ""}
+      ${qualityBadge(r)}
       ${typeof r.distance === "number" ? `<span class="tool-badge">d=${r.distance}</span>` : ""}
     </div>`;
   const overlay = document.createElement("div");
@@ -619,6 +826,19 @@ function renderLibItem(r) {
     if (updated) { r.favorite = updated.favorite; el.replaceWith(renderLibItem(r)); }
   };
   overlay.appendChild(fav);
+  const trashBtn = document.createElement("button");
+  trashBtn.className = "trash-btn";
+  trashBtn.textContent = "🗑";
+  trashBtn.title = t("lib.toTrash", "휴지통으로 이동");
+  trashBtn.onclick = async (e) => {
+    e.stopPropagation();
+    try {
+      await api.send("POST", "/api/trash", { path: r.file });
+      toast(t("lib.trashed", "휴지통으로 이동했습니다"));
+      el.remove();
+    } catch (err2) { toast(err2.message, true); }
+  };
+  overlay.appendChild(trashBtn);
   body.appendChild(overlay);
   el.append(img, body);
   el.onclick = () => openLibraryDetail(r.file);
@@ -638,7 +858,7 @@ async function openLibraryDetail(path) {
   } catch (e) { toast(e.message, true); }
 }
 
-$("#libTool").onchange = $("#libRating").onchange =
+$("#libTool").onchange = $("#libRating").onchange = $("#libQuality").onchange =
 $("#libGroup").onchange = $("#libSort").onchange = () => loadLibrary(true);
 $("#libMore").onclick = () => loadLibrary(false);
 $("#libFav").onclick = () => {
@@ -647,7 +867,16 @@ $("#libFav").onclick = () => {
 };
 $("#libDupes").onclick = () => {
   lib.dupes = !lib.dupes;
+  lib.trash = false;
+  $("#libTrash").classList.remove("on");
   $("#libDupes").classList.toggle("on", lib.dupes);
+  loadLibrary(true);
+};
+$("#libTrash").onclick = () => {
+  lib.trash = !lib.trash;
+  lib.dupes = false;
+  $("#libDupes").classList.remove("on");
+  $("#libTrash").classList.toggle("on", lib.trash);
   loadLibrary(true);
 };
 let libSearchTimer;
@@ -730,8 +959,13 @@ function openDetailData(r, opts = {}) {
 
   const tagsBox = $("#modalTags");
   const tags = Array.isArray(r.tags) ? r.tags : [];
-  tagsBox.classList.toggle("hidden", !tags.length);
-  tagsBox.innerHTML = tags.map((x) => `<span>${escapeHtml(x)}</span>`).join("");
+  const issues = (r.quality_issues || []).map((i) => `⚠ ${i}`);
+  if (r.quality_score !== null && r.quality_score !== undefined) {
+    issues.unshift(`Q ${Math.round(r.quality_score)}/100`);
+  }
+  const chips = [...issues, ...tags];
+  tagsBox.classList.toggle("hidden", !chips.length);
+  tagsBox.innerHTML = chips.map((x) => `<span>${escapeHtml(x)}</span>`).join("");
 
   const simBox = $("#similarBox");
   simBox.classList.add("hidden");
@@ -892,11 +1126,14 @@ function escapeHtml(s) {
 /* ---------------------------------------------------------- init */
 
 (async function init() {
+  const loggedIn = await checkLogin();
   try {
-    await loadSettings();
-    await loadLang(state.settings.language);
+    if (loggedIn) {
+      await loadSettings();
+      await loadLang(state.settings.language);
+    }
   } catch (e) {
     toast(`${t("toast.loadFailed", "불러오기 실패")}: ${e.message}`, true);
   }
-  pollJobs();
+  if (loggedIn) pollJobs();
 })();

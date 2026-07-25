@@ -1,0 +1,214 @@
+"""Persistent library: search, ratings, similarity, stats, watches,
+groups, WD Tagger and quality analysis."""
+from __future__ import annotations
+
+import re as _re
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+
+from .. import db
+from .. import stats as stats_mod
+from ..quality import quality_manager
+from ..tagger import TaggerUnavailable, tagger_manager
+from ..watcher import watch_manager
+
+router = APIRouter(prefix="/api", tags=["library"])
+
+
+class MetaPatch(BaseModel):
+    path: str
+    rating: int | None = None
+    favorite: bool | None = None
+    group_name: str | None = None
+
+
+class WatchBody(BaseModel):
+    directory: str
+    recursive: bool = True
+    poll_interval: float = 30
+
+
+class WatchPatch(BaseModel):
+    enabled: bool | None = None
+    poll_interval: float | None = None
+
+
+class GroupBody(BaseModel):
+    name: str
+    pattern: str
+    is_regex: bool = False
+    target: str = "prompt"
+
+
+class RunBody(BaseModel):
+    limit: int | None = None
+
+
+@router.get("/library")
+def library(
+    q: str = "",
+    tool: str = "",
+    favorite: bool | None = None,
+    min_rating: int = 0,
+    group: str = "",
+    quality: str = "",
+    sort: str = "recent",
+    offset: int = 0,
+    limit: int = 60,
+):
+    total, items = db.query_images(
+        q=q, tool=tool, favorite=favorite, min_rating=min_rating,
+        group=group, quality=quality, sort=sort, offset=offset,
+        limit=min(limit, 500),
+    )
+    return {"total": total, "offset": offset, "items": items,
+            "groups": db.group_names()}
+
+
+@router.get("/library/item")
+def library_item(path: str = Query(...)):
+    item = db.get_image(path)
+    if not item:
+        raise HTTPException(404, "not in library")
+    return item
+
+
+@router.patch("/library/item")
+def library_item_patch(patch: MetaPatch):
+    if not db.has_image(patch.path):
+        raise HTTPException(404, "not in library")
+    return db.set_meta(
+        patch.path, rating=patch.rating, favorite=patch.favorite,
+        group_name=patch.group_name,
+    )
+
+
+@router.get("/library/similar")
+def library_similar(path: str = Query(...), max_distance: int = 10,
+                    limit: int = 30):
+    return {"items": db.similar_images(path, max(0, min(max_distance, 32)),
+                                       limit)}
+
+
+@router.get("/library/duplicates")
+def library_duplicates(limit: int = 100):
+    return {"groups": db.duplicate_groups(min(limit, 500))}
+
+
+@router.get("/library/summary")
+def library_summary():
+    return db.summary()
+
+
+@router.get("/stats/prompts")
+def prompt_stats(top: int = 50):
+    return stats_mod.collect(top=max(1, min(top, 200)))
+
+
+# ---------------------------------------------------------------- watches
+
+
+@router.get("/watches")
+def get_watches():
+    return {"watches": db.list_watches(), "watcher": watch_manager.status()}
+
+
+@router.post("/watches")
+def post_watch(body: WatchBody):
+    p = Path(body.directory).expanduser()
+    try:
+        p = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(400, f"directory not found: {body.directory}")
+    if not p.is_dir():
+        raise HTTPException(400, f"not a directory: {p}")
+    return db.add_watch(str(p), body.recursive, body.poll_interval)
+
+
+@router.patch("/watches/{watch_id}")
+def patch_watch(watch_id: int, patch: WatchPatch):
+    db.update_watch(watch_id, enabled=patch.enabled,
+                    poll_interval=patch.poll_interval)
+    return {"ok": True}
+
+
+@router.delete("/watches/{watch_id}")
+def remove_watch(watch_id: int):
+    db.delete_watch(watch_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- groups
+
+
+@router.get("/groups")
+def get_groups():
+    return {"groups": db.list_groups()}
+
+
+@router.post("/groups")
+def post_group(body: GroupBody):
+    try:
+        return db.add_group(body.name.strip(), body.pattern, body.is_regex,
+                            body.target)
+    except _re.error as e:
+        raise HTTPException(400, f"invalid regex: {e}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/groups/{group_id}")
+def remove_group(group_id: int):
+    db.delete_group(group_id)
+    return {"ok": True}
+
+
+@router.post("/groups/apply")
+def apply_groups(overwrite: bool = False):
+    return {"updated": db.apply_groups(overwrite=overwrite)}
+
+
+# ---------------------------------------------------------------- tagger
+
+
+@router.get("/tagger/status")
+def tagger_status():
+    return tagger_manager.status()
+
+
+@router.post("/tagger/run")
+def tagger_run(body: RunBody):
+    try:
+        return tagger_manager.run(limit=body.limit)
+    except (TaggerUnavailable, RuntimeError) as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post("/tagger/cancel")
+def tagger_cancel():
+    tagger_manager.cancel()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- quality
+
+
+@router.get("/quality/status")
+def quality_status():
+    return quality_manager.status()
+
+
+@router.post("/quality/run")
+def quality_run(body: RunBody):
+    try:
+        return quality_manager.run(limit=body.limit)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post("/quality/cancel")
+def quality_cancel():
+    quality_manager.cancel()
+    return {"ok": True}

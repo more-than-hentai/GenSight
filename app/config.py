@@ -40,6 +40,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "jobs_per_gpu": 1,
     },
     "page_size": 60,
+    "auth": {
+        # Optional session auth; managed via /api/auth/*, never expose
+        # salt/password_hash through the settings API.
+        "enabled": False,
+        "username": "",
+        "salt": "",
+        "password_hash": "",
+    },
 }
 
 _lock = threading.Lock()
