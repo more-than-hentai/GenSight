@@ -16,6 +16,11 @@
     <button class="tab" data-tab="stats" data-i18n="tab.stats">통계</button>
     <button class="tab" data-tab="settings" data-i18n="tab.settings">설정</button>
   </nav>
+  <select id="themeSelect" title="Theme">
+    <option value="dark" data-i18n="theme.dark">다크</option>
+    <option value="light" data-i18n="theme.light">라이트</option>
+    <option value="nord">Nord</option>
+  </select>
   <select id="langSelect" title="Language">
     <option value="ko">한국어</option>
     <option value="en">English</option>
@@ -338,6 +343,7 @@
           <button data-copy="markdown">Markdown</button>
           <button data-copy="bbcode">BBCode</button>
           <button data-copy="prompt" data-i18n="detail.promptOnly">프롬프트만</button>
+          <button id="viewTable" data-i18n="detail.tableView">표 보기</button>
           <label class="with-image">
             <input type="checkbox" id="copyWithImage">
             <span data-i18n="detail.withImage">이미지 포함</span>

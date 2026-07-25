@@ -12,6 +12,21 @@ const state = {
   offset: 0,
   pageSize: 60,
   detail: null,
+  viewFmt: "readable",
+  viewTable: localStorage.getItem("gensight.viewTable") === "1",
+};
+
+/* ---------------------------------------------------------- theme */
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const sel = $("#themeSelect");
+  if (sel) sel.value = theme;
+}
+applyTheme(localStorage.getItem("gensight.theme") || "dark");
+$("#themeSelect").onchange = (e) => {
+  localStorage.setItem("gensight.theme", e.target.value);
+  applyTheme(e.target.value);
 };
 
 const api = {
@@ -933,7 +948,7 @@ function openDetailData(r, opts = {}) {
   const img = $("#modalImg");
   img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
   img.src = `/api/image?path=${encodeURIComponent(r.file)}`;
-  $("#modalMeta").textContent = formatResult(r, "readable");
+  renderModalMeta("readable");
 
   // Library-only controls: rating / favorite / group / tags / similar
   const controls = $("#modalControls");
@@ -1013,7 +1028,7 @@ $$("[data-copy]").forEach((b) => {
   b.onclick = async () => {
     if (!state.detail) return;
     const text = formatResult(state.detail, b.dataset.copy);
-    $("#modalMeta").textContent = text;
+    renderModalMeta(b.dataset.copy);
     if ($("#copyWithImage").checked) {
       await copyWithImage(state.detail, text);
     } else {
@@ -1022,19 +1037,115 @@ $$("[data-copy]").forEach((b) => {
   };
 });
 
+$("#viewTable").onclick = () => {
+  state.viewTable = !state.viewTable;
+  localStorage.setItem("gensight.viewTable", state.viewTable ? "1" : "0");
+  renderModalMeta(state.viewFmt);
+};
+
+/* -------- metadata rendering: syntax highlight + table view -------- */
+
+function jsonObject(r) {
+  return {
+    prompt: normalizeText(r.prompt),
+    negative_prompt: normalizeText(r.negative_prompt),
+    ...orderedParams(r),
+  };
+}
+
+function highlightJsonFlat(obj) {
+  const entries = Object.entries(obj);
+  let out = "{\n";
+  entries.forEach(([k, v], i) => {
+    const key = `<span class="syn-key">${escapeHtml(JSON.stringify(k))}</span>`;
+    const raw = JSON.stringify(v);
+    const cls = typeof v === "number" ? "syn-num" : "syn-str";
+    out += `  ${key}: <span class="${cls}">${escapeHtml(raw)}</span>` +
+      (i < entries.length - 1 ? "," : "") + "\n";
+  });
+  return out + "}";
+}
+
+function highlightReadable(text) {
+  return escapeHtml(text).split("\n").map((line) => {
+    if (/^(Prompt|Negative prompt):$/.test(line)) {
+      return `<span class="syn-head">${line}</span>`;
+    }
+    const m = line.match(/^([A-Za-z][\w .+]*): (.*)$/);
+    if (m) {
+      const cls = /^-?[\d.]+(x[\d.]+)?$/.test(m[2]) ? "syn-num" : "syn-str";
+      return `<span class="syn-key">${m[1]}</span>: <span class="${cls}">${m[2]}</span>`;
+    }
+    return line;
+  }).join("\n");
+}
+
+function metaTableHtml(r) {
+  let rows = `<tr><th class="syn-head">Prompt</th>` +
+    `<td class="prompt-cell">${escapeHtml(normalizeText(r.prompt) || "—")}</td></tr>`;
+  if (r.negative_prompt) {
+    rows += `<tr><th class="syn-head">Negative</th>` +
+      `<td class="prompt-cell">${escapeHtml(normalizeText(r.negative_prompt))}</td></tr>`;
+  }
+  for (const [k, v] of Object.entries(orderedParams(r))) {
+    rows += `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(String(v))}</td></tr>`;
+  }
+  return `<table class="meta-table">${rows}</table>`;
+}
+
+function renderModalMeta(fmt) {
+  state.viewFmt = fmt;
+  $("#viewTable").classList.toggle("on", state.viewTable);
+  const r = state.detail;
+  if (!r) return;
+  const box = $("#modalMeta");
+  if (state.viewTable) {
+    box.innerHTML = metaTableHtml(r);
+  } else if (fmt === "json") {
+    box.innerHTML = highlightJsonFlat(jsonObject(r));
+  } else if (fmt === "readable") {
+    box.innerHTML = highlightReadable(formatResult(r, "readable"));
+  } else {
+    box.textContent = formatResult(r, fmt);
+  }
+}
+
+/* -------- copy with image (original, thumbnail fallback) -------- */
+
+// data-URL embedding above this size makes clipboard/paste unusable
+const MAX_COPY_ORIGINAL_BYTES = 30 * 1024 * 1024;
+
+async function fetchDataUrl(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const blob = await resp.blob();
+  const dataUrl = await new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+  return { dataUrl, size: blob.size };
+}
+
 async function copyWithImage(r, text) {
   try {
-    const resp = await fetch(`/api/image?path=${encodeURIComponent(r.file)}&thumb=true`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const blob = await resp.blob();
-    const dataUrl = await new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
-      fr.onerror = reject;
-      fr.readAsDataURL(blob);
-    });
+    // Prefer the original file; fall back to the thumbnail when the
+    // original is too large to embed as a data URL.
+    let img;
+    try {
+      img = await fetchDataUrl(`/api/image?path=${encodeURIComponent(r.file)}`);
+      if (img.size > MAX_COPY_ORIGINAL_BYTES) img = null;
+    } catch {
+      img = null;
+    }
+    if (!img) {
+      img = await fetchDataUrl(
+        `/api/image?path=${encodeURIComponent(r.file)}&thumb=true`
+      );
+    }
     const html =
-      `<div><img src="${dataUrl}" alt="${escapeHtml(r.filename)}"><br>` +
+      `<div><img src="${img.dataUrl}" alt="${escapeHtml(r.filename)}"><br>` +
       `<pre>${escapeHtml(text)}</pre></div>`;
     await navigator.clipboard.write([
       new ClipboardItem({
