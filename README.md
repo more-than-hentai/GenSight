@@ -49,6 +49,21 @@ docker compose up --build
 이미지 디렉토리는 `docker-compose.yml`의 volumes에 read-only로 마운트한 뒤,
 웹 UI 설정에서 컨테이너 내부 경로(`/images/...`)를 등록하세요.
 
+## Screenshots
+
+### 라이브러리 — 검색·필터·평점·품질 배지
+![Library](docs/images/library.png)
+
+### 상세 보기 — 신택스 하이라이트, 게시판용 복사(JSON/Markdown/BBCode/표)
+![Detail](docs/images/detail.png)
+
+### 스캔 · 통계 · 설정
+| 스캔 | 통계 |
+|---|---|
+| ![Scan](docs/images/scan.png) | ![Stats](docs/images/stats.png) |
+
+![Settings](docs/images/settings.png)
+
 ## Documentation
 
 - [설치 및 업그레이드](docs/installation.md)

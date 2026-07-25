@@ -1174,6 +1174,11 @@ function escapeHtml(s) {
 
 /* ---------------------------------------------------------- init */
 
+function activateTab(name) {
+  const btn = $$(".tab").find((b) => b.dataset.tab === name);
+  if (btn) btn.click();
+}
+
 (async function init() {
   const loggedIn = await checkLogin();
   try {
@@ -1184,5 +1189,17 @@ function escapeHtml(s) {
   } catch (e) {
     toast(`${t("toast.loadFailed", "불러오기 실패")}: ${e.message}`, true);
   }
-  if (loggedIn) pollJobs();
+  if (loggedIn) {
+    pollJobs();
+    // Deep links: /#library /#stats /#settings and ?detail=<path>
+    const hashTab = location.hash.replace("#", "");
+    if (["scan", "library", "stats", "settings"].includes(hashTab)) {
+      activateTab(hashTab);
+    }
+    const detailPath = new URLSearchParams(location.search).get("detail");
+    if (detailPath) {
+      activateTab("library");
+      openLibraryDetail(detailPath);
+    }
+  }
 })();
