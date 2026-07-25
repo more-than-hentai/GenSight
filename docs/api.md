@@ -29,7 +29,7 @@ Base URL: `http://127.0.0.1:8090`
 
 | Method | Path | 설명 |
 |---|---|---|
-| GET | `/api/library?...&directory=...` | 라이브러리 검색 — 작업별 결과는 `directory` 필터로 조회 |
+| GET | `/api/library?...&directory=...&content_rating=...&sort=key1,key2,key3` | 라이브러리 검색 — `sort`는 다중 정렬 체인 (recent/oldest/mtime_desc/mtime_asc/rating/rating_asc/quality/quality_desc/name/name_desc/size_desc/size_asc), `content_rating`은 PG/PG-13/R/X/unrated |
 | GET | `/api/library/export?format=json\|csv&필터...` | 필터 적용 라이브러리 내보내기 |
 | POST | `/api/library/cleanup` | 누락 파일 행 + 고아 썸네일 캐시 정리 |
 | GET | `/api/image?path=...&thumb=true\|false` | 이미지/썸네일 서빙 (허용 경로 하위만) |

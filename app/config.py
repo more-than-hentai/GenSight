@@ -40,6 +40,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "jobs_per_gpu": 1,
     },
     "page_size": 60,
+    "quality": {
+        # Analyze quality inline while scanning/ingesting new images
+        # (roughly doubles per-file decode cost; off by default)
+        "auto": False,
+    },
     "auth": {
         # Optional session auth; managed via /api/auth/*, never expose
         # salt/password_hash through the settings API.

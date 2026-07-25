@@ -92,7 +92,31 @@ CREATE TABLE IF NOT EXISTS trash (
 _MIGRATIONS = [
     ("images", "quality_score", "ALTER TABLE images ADD COLUMN quality_score REAL"),
     ("images", "quality_issues", "ALTER TABLE images ADD COLUMN quality_issues TEXT"),
+    ("images", "content_rating", "ALTER TABLE images ADD COLUMN content_rating TEXT"),
 ]
+
+# Whitelisted sort keys; the API accepts a comma-separated chain
+# ("mtime_desc,rating,name") applied as 1st/2nd/3rd ORDER BY level.
+_SORT_KEYS = {
+    "recent": "scanned_at DESC",
+    "oldest": "scanned_at ASC",
+    "mtime_desc": "mtime DESC",
+    "mtime_asc": "mtime ASC",
+    "rating": "rating DESC",
+    "rating_asc": "rating ASC",
+    "quality": "quality_score ASC NULLS LAST",
+    "quality_desc": "quality_score DESC NULLS LAST",
+    "name": "filename COLLATE NOCASE ASC",
+    "name_desc": "filename COLLATE NOCASE DESC",
+    "size_desc": "size DESC",
+    "size_asc": "size ASC",
+}
+
+
+def _order_clause(sort: str) -> str:
+    parts = [_SORT_KEYS[s.strip()] for s in (sort or "").split(",")
+             if s.strip() in _SORT_KEYS]
+    return ", ".join(parts) if parts else "scanned_at DESC"
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -225,6 +249,7 @@ def query_images(
     group: str = "",
     quality: str = "",
     directory: str = "",
+    content_rating: str = "",
     sort: str = "recent",
     offset: int = 0,
     limit: int = 60,
@@ -233,6 +258,11 @@ def query_images(
     if directory:
         where.append("path LIKE ?")
         args.append(str(directory).rstrip("/") + "/%")
+    if content_rating == "unrated":
+        where.append("content_rating IS NULL")
+    elif content_rating:
+        where.append("content_rating=?")
+        args.append(content_rating)
     if quality == "issues":
         where.append("quality_issues IS NOT NULL AND quality_issues != '[]'")
     elif quality == "low":
@@ -259,13 +289,7 @@ def query_images(
         where.append("group_name=?")
         args.append(group)
     w = ("WHERE " + " AND ".join(where)) if where else ""
-    order = {
-        "recent": "scanned_at DESC",
-        "oldest": "scanned_at ASC",
-        "rating": "rating DESC, scanned_at DESC",
-        "name": "filename COLLATE NOCASE ASC",
-        "quality": "quality_score ASC NULLS LAST",
-    }.get(sort, "scanned_at DESC")
+    order = _order_clause(sort)
     conn = connect()
     total = conn.execute(f"SELECT COUNT(*) c FROM images {w}", args).fetchone()["c"]
     rows = conn.execute(
@@ -301,13 +325,20 @@ def set_meta(
     return get_image(path)
 
 
-def set_tags(path: str, tags: list[str]) -> None:
+def set_tags(path: str, tags: list[str],
+             content_rating: str | None = None) -> None:
     conn = connect()
     with conn:
-        conn.execute(
-            "UPDATE images SET tags=? WHERE path=?",
-            (json.dumps(tags, ensure_ascii=False), path),
-        )
+        if content_rating is not None:
+            conn.execute(
+                "UPDATE images SET tags=?, content_rating=? WHERE path=?",
+                (json.dumps(tags, ensure_ascii=False), content_rating, path),
+            )
+        else:
+            conn.execute(
+                "UPDATE images SET tags=? WHERE path=?",
+                (json.dumps(tags, ensure_ascii=False), path),
+            )
     bump_version()
 
 
@@ -490,7 +521,7 @@ def restore_image_row(item: dict, new_path: str) -> None:
     set_meta(new_path, rating=item.get("rating"),
              favorite=item.get("favorite"), group_name=item.get("group_name"))
     if item.get("tags"):
-        set_tags(new_path, item["tags"])
+        set_tags(new_path, item["tags"], item.get("content_rating"))
     if item.get("quality_score") is not None:
         set_quality(new_path, item["quality_score"],
                     item.get("quality_issues") or [])

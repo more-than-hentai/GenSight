@@ -288,6 +288,19 @@ button.ghost { background: none; border: none; font-size: 16px; }
 .q-badge.bad { background: rgba(239,91,91,.15); color: var(--err); }
 .trash-btn { background: none; border: none; padding: 2px 4px; font-size: 13px; }
 .trash-btn:hover { color: var(--err); }
+
+/* content rating (후방주의) */
+.item { position: relative; }
+.cr-R, .cr-X { color: var(--err) !important; border: 1px solid var(--err); }
+.nsfw-cover {
+  position: absolute; top: 0; left: 0; right: 0; aspect-ratio: 1;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+  background: rgba(0,0,0,.3); color: #fff; font-size: 12.5px;
+  cursor: pointer; z-index: 2; text-align: center; padding: 8px;
+}
+#modalImg.nsfw-blur { filter: blur(26px); cursor: pointer; }
+.copy-tags { margin-top: 8px; font-size: 12.5px; }
 .dir-chip {
   cursor: pointer; max-width: 320px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; color: var(--accent);

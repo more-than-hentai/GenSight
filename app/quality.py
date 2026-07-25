@@ -145,6 +145,12 @@ class QualityManager:
                 db.set_quality(path, score, issues)
             except Exception as e:  # noqa: BLE001
                 logger.warning("quality analysis failed for %s: %s", path, e)
+                # Mark it so the file leaves the pending queue instead of
+                # being retried forever on every run.
+                try:
+                    db.set_quality(path, 0.0, ["analysis_failed"])
+                except Exception:  # noqa: BLE001
+                    pass
                 with job.lock:
                     job.errors += 1
             finally:

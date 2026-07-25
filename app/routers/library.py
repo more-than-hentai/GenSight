@@ -59,13 +59,15 @@ def library(
     group: str = "",
     quality: str = "",
     directory: str = "",
+    content_rating: str = "",
     sort: str = "recent",
     offset: int = 0,
     limit: int = 60,
 ):
     total, items = db.query_images(
         q=q, tool=tool, favorite=favorite, min_rating=min_rating,
-        group=group, quality=quality, directory=directory, sort=sort,
+        group=group, quality=quality, directory=directory,
+        content_rating=content_rating, sort=sort,
         offset=offset, limit=min(limit, 500),
     )
     return {"total": total, "offset": offset, "items": items,
@@ -86,13 +88,15 @@ def library_export(
     group: str = "",
     quality: str = "",
     directory: str = "",
+    content_rating: str = "",
 ):
     """Export the library (respecting the active filters) as JSON/CSV."""
     if format not in ("json", "csv"):
         raise HTTPException(400, "format must be json or csv")
     _total, items = db.query_images(
         q=q, tool=tool, favorite=favorite, min_rating=min_rating,
-        group=group, quality=quality, directory=directory, limit=1_000_000,
+        group=group, quality=quality, directory=directory,
+        content_rating=content_rating, limit=1_000_000,
     )
     if format == "csv":
         buf = io.StringIO()

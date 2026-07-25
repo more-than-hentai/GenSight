@@ -67,6 +67,23 @@ React가 아닌 Vue를 권장하는 이유: 템플릿 문법이 현재 HTML 구�
 - SQLite: 스레드별 연결, WAL 모드, busy_timeout 30s,
   초기화(스키마/WAL 전환)는 전역 락으로 직렬화
 
+## 콘텐츠 등급 (후방주의)
+
+WD Tagger의 등급 헤드(카테고리 9: general/sensitive/questionable/explicit)를
+civitai식 PG/PG-13/R/X로 매핑해 `content_rating` 컬럼에 저장합니다
+(`tagger.extract_predictions`). 태깅 실행 시 태그와 함께 자동으로 채워지며,
+라이브러리에서 등급 필터·R/X 블러(클릭 시 표시)가 적용됩니다.
+대형 LLM(예: Qwen 35B)은 이 용도에 불필요합니다 — 분류 전용 태거가
+훨씬 빠르고 정확합니다.
+
+## VL 캡셔닝 / 추천 프롬프트 (로드맵)
+
+danbooru 태그 형식의 "역프롬프트"는 이미 WD Tagger 태그로 DB화되어
+검색 대상에 포함되고, 상세 모달의 "태그를 프롬프트로 복사"로 바로 쓸 수
+있습니다. krea2 스타일의 자연어 캡션이 필요해지면 VL 캡셔닝 모델
+(JoyCaption, Florence-2, Qwen-VL 등)을 tagger.py와 같은 job 패턴으로
+추가하고 `caption` 컬럼에 저장하는 것을 권장합니다.
+
 ## 품질 판별의 한계와 확장 지점
 
 현재는 PIL 휴리스틱(블러/노출/대비/해상도) + 생성 설정 검사입니다.

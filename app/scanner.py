@@ -44,6 +44,15 @@ def process_and_store(path: Path | str) -> dict[str, Any]:
         db.upsert_image(item, phash)
     except Exception:  # noqa: BLE001 - DB hiccup must not kill the scan
         logger.exception("db upsert failed for %s", path)
+        return item
+    if not item["error"] and config.load_settings()["quality"]["auto"]:
+        try:
+            from . import quality
+
+            score, issues = quality.analyze(str(path), item.get("params"))
+            db.set_quality(str(path), score, issues)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("auto quality failed for %s: %s", path, e)
     return item
 
 
