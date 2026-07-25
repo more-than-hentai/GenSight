@@ -44,6 +44,13 @@ docker compose up --build
 이미지 디렉토리는 `docker-compose.yml`의 volumes에 read-only로 마운트한 뒤,
 웹 UI 설정에서 컨테이너 내부 경로(`/images/...`)를 등록하세요.
 
+## Documentation
+
+- [설치 및 업그레이드](docs/installation.md)
+- [사용자 가이드](docs/user-guide.md)
+- [유지보수 가이드](docs/maintenance.md)
+- [API 레퍼런스](docs/api.md)
+
 ## Usage
 
 1. **설정** 탭에서 이미지 디렉토리를 추가합니다.

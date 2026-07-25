@@ -28,7 +28,10 @@
       <h2 data-i18n="scan.title">새 스캔</h2>
       <div class="row">
         <label data-i18n="scan.directory">디렉토리</label>
-        <select id="scanDir"></select>
+        <input type="text" id="scanDir" list="dirOptions" class="grow"
+               data-i18n-ph="scan.dirInput"
+               placeholder="디렉토리 경로 직접 입력 또는 등록된 경로 선택">
+        <datalist id="dirOptions"></datalist>
       </div>
       <div class="row">
         <label><input type="checkbox" id="scanRecursive" checked>
@@ -41,6 +44,14 @@
         이미지가 매우 많은 디렉토리는 워커 수를 조절해 시스템 부하를 제어할 수 있습니다.
         디렉토리는 설정 탭에서 먼저 등록해야 합니다.
       </p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="analyze.title">단일 이미지 분석</h2>
+      <div id="dropzone" class="dropzone">
+        <span data-i18n="analyze.drop">이미지를 여기에 드롭하거나 클릭하여 업로드</span>
+      </div>
+      <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.avif,.bmp,.tiff" hidden>
     </div>
 
     <div class="card">
@@ -126,17 +137,25 @@
   <div class="modal-box">
     <div class="modal-head">
       <h3 id="modalTitle"></h3>
-      <button id="modalClose" class="ghost">✕</button>
+      <div class="modal-actions">
+        <button id="layoutToggle" class="ghost" title="레이아웃 전환 (좌우/상하)">⇅</button>
+        <button id="modalClose" class="ghost">✕</button>
+      </div>
     </div>
-    <div class="modal-body">
+    <div class="modal-body" id="modalBody">
       <img id="modalImg" alt="">
       <div class="modal-meta">
         <div class="copy-bar">
           <span data-i18n="detail.copyAs">복사 형식:</span>
+          <button data-copy="readable" data-i18n="detail.readable">보기</button>
           <button data-copy="json">JSON</button>
           <button data-copy="markdown">Markdown</button>
           <button data-copy="bbcode">BBCode</button>
           <button data-copy="prompt" data-i18n="detail.promptOnly">프롬프트만</button>
+          <label class="with-image">
+            <input type="checkbox" id="copyWithImage">
+            <span data-i18n="detail.withImage">이미지 포함</span>
+          </label>
         </div>
         <pre id="modalMeta"></pre>
       </div>

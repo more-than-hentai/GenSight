@@ -8,6 +8,10 @@
   "scan.workers": "Extract workers",
   "scan.start": "Start scan",
   "scan.hint": "For directories with a very large number of images, adjust the worker count to control system load. Directories must first be registered in Settings.",
+  "scan.dirInput": "Type a directory path or pick a registered one",
+  "scan.needDir": "Enter a directory path",
+  "analyze.title": "Analyze a single image",
+  "analyze.drop": "Drop an image here or click to upload",
   "scan.jobs": "Jobs",
   "scan.noJobs": "No jobs yet.",
   "scan.noDirs": "Add a directory in Settings first",
@@ -25,6 +29,8 @@
   "results.count": "Results",
   "results.more": "Load more",
   "detail.copyAs": "Copy as:",
+  "detail.readable": "Readable",
+  "detail.withImage": "Include image",
   "detail.promptOnly": "Prompt only",
   "settings.dirs": "Scan directories",
   "settings.dirPlaceholder": "/path/to/images",
@@ -43,5 +49,9 @@
   "toast.saved": "Settings saved",
   "toast.dirAdded": "Directory added",
   "toast.scanStarted": "Scan started",
-  "toast.copied": "Copied to clipboard"
+  "toast.copied": "Copied to clipboard",
+  "toast.copiedWithImage": "Copied with image",
+  "toast.analyzed": "Analysis complete",
+  "toast.analyzeFailed": "Analysis failed",
+  "toast.loadFailed": "Failed to load"
 }

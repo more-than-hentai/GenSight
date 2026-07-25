@@ -8,6 +8,10 @@
   "scan.workers": "추출 워커 수",
   "scan.start": "스캔 시작",
   "scan.hint": "이미지가 매우 많은 디렉토리는 워커 수를 조절해 시스템 부하를 제어할 수 있습니다. 디렉토리는 설정 탭에서 먼저 등록해야 합니다.",
+  "scan.dirInput": "디렉토리 경로 직접 입력 또는 등록된 경로 선택",
+  "scan.needDir": "디렉토리 경로를 입력하세요",
+  "analyze.title": "단일 이미지 분석",
+  "analyze.drop": "이미지를 여기에 드롭하거나 클릭하여 업로드",
   "scan.jobs": "작업 목록",
   "scan.noJobs": "아직 작업이 없습니다.",
   "scan.noDirs": "설정에서 디렉토리를 먼저 추가하세요",
@@ -25,6 +29,8 @@
   "results.count": "결과",
   "results.more": "더 보기",
   "detail.copyAs": "복사 형식:",
+  "detail.readable": "보기",
+  "detail.withImage": "이미지 포함",
   "detail.promptOnly": "프롬프트만",
   "settings.dirs": "스캔 디렉토리",
   "settings.dirPlaceholder": "/path/to/images",
@@ -43,5 +49,9 @@
   "toast.saved": "설정이 저장되었습니다",
   "toast.dirAdded": "디렉토리가 추가되었습니다",
   "toast.scanStarted": "스캔을 시작했습니다",
-  "toast.copied": "클립보드에 복사되었습니다"
+  "toast.copied": "클립보드에 복사되었습니다",
+  "toast.copiedWithImage": "이미지와 함께 복사되었습니다",
+  "toast.analyzed": "분석 완료",
+  "toast.analyzeFailed": "분석 실패",
+  "toast.loadFailed": "불러오기 실패"
 }

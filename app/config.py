@@ -17,6 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("GENSIGHT_DATA_DIR", BASE_DIR / "data"))
 SETTINGS_FILE = DATA_DIR / "settings.json"
 THUMB_DIR = DATA_DIR / "thumbs"
+UPLOAD_DIR = DATA_DIR / "uploads"
 
 _CPU = os.cpu_count() or 4
 

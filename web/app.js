@@ -66,18 +66,15 @@ async function loadSettings() {
 }
 
 function renderScanDirs() {
-  const sel = $("#scanDir");
-  sel.innerHTML = "";
+  const list = $("#dirOptions");
+  list.innerHTML = "";
   for (const d of state.settings.directories) {
     const o = document.createElement("option");
-    o.value = o.textContent = d;
-    sel.appendChild(o);
+    o.value = d;
+    list.appendChild(o);
   }
-  if (!state.settings.directories.length) {
-    const o = document.createElement("option");
-    o.value = "";
-    o.textContent = t("scan.noDirs", "설정에서 디렉토리를 먼저 추가하세요");
-    sel.appendChild(o);
+  if (!$("#scanDir").value && state.settings.directories.length) {
+    $("#scanDir").value = state.settings.directories[0];
   }
   $("#scanRecursive").checked = state.settings.recursive;
   $("#scanWorkers").value = state.settings.workers.extract;
@@ -160,9 +157,11 @@ $("#saveSettings").onclick = async () => {
       jobs_per_gpu: +$("#setJobsPerGpu").value,
     },
   };
-  await api.send("PUT", "/api/settings", patch);
-  await loadSettings();
-  toast(t("toast.saved", "설정이 저장되었습니다"));
+  try {
+    await api.send("PUT", "/api/settings", patch);
+    await loadSettings();
+    toast(t("toast.saved", "설정이 저장되었습니다"));
+  } catch (e) { toast(e.message, true); }
 };
 
 $("#langSelect").onchange = async (e) => {
@@ -173,8 +172,8 @@ $("#langSelect").onchange = async (e) => {
 /* ---------------------------------------------------------- scan jobs */
 
 $("#scanStart").onclick = async () => {
-  const directory = $("#scanDir").value;
-  if (!directory) { toast(t("scan.noDirs", "설정에서 디렉토리를 먼저 추가하세요"), true); return; }
+  const directory = $("#scanDir").value.trim();
+  if (!directory) { toast(t("scan.needDir", "디렉토리 경로를 입력하세요"), true); return; }
   try {
     await api.send("POST", "/api/scan", {
       directory,
@@ -188,10 +187,52 @@ $("#scanStart").onclick = async () => {
 
 async function pollJobs() {
   clearTimeout(state.jobsTimer);
-  const { jobs } = await api.get("/api/jobs");
+  let jobs;
+  try {
+    ({ jobs } = await api.get("/api/jobs"));
+  } catch {
+    // Server briefly unreachable (restart, sleep) — retry quietly.
+    state.jobsTimer = setTimeout(pollJobs, 3000);
+    return;
+  }
   renderJobs(jobs);
   if (jobs.some((j) => ["queued", "scanning", "extracting"].includes(j.status))) {
     state.jobsTimer = setTimeout(pollJobs, 1200);
+  }
+}
+
+/* -------- single image analyze (drag & drop / click) -------- */
+
+const dropzone = $("#dropzone");
+dropzone.onclick = () => $("#fileInput").click();
+dropzone.ondragover = (e) => { e.preventDefault(); dropzone.classList.add("drag"); };
+dropzone.ondragleave = () => dropzone.classList.remove("drag");
+dropzone.ondrop = (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("drag");
+  const file = e.dataTransfer.files?.[0];
+  if (file) analyzeFile(file);
+};
+$("#fileInput").onchange = (e) => {
+  const file = e.target.files?.[0];
+  if (file) analyzeFile(file);
+  e.target.value = "";
+};
+
+async function analyzeFile(file) {
+  dropzone.classList.add("busy");
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const r = await fetch("/api/analyze", { method: "POST", body: form });
+    if (!r.ok) throw await err(r);
+    const result = await r.json();
+    toast(t("toast.analyzed", "분석 완료"));
+    openDetailData(result);
+  } catch (e) {
+    toast(`${t("toast.analyzeFailed", "분석 실패")}: ${e.message}`, true);
+  } finally {
+    dropzone.classList.remove("busy");
   }
 }
 
@@ -239,7 +280,10 @@ function renderJobs(jobs) {
 /* ---------------------------------------------------------- results */
 
 async function refreshResultJobs() {
-  const { jobs } = await api.get("/api/jobs");
+  let jobs;
+  try {
+    ({ jobs } = await api.get("/api/jobs"));
+  } catch (e) { toast(e.message, true); return; }
   const sel = $("#resultJob");
   const prev = sel.value;
   sel.innerHTML = "";
@@ -271,10 +315,13 @@ async function loadResults(reset) {
   state.currentJob = jobId;
   const q = $("#resultSearch").value;
   const tool = $("#resultTool").value;
-  const data = await api.get(
-    `/api/jobs/${jobId}/results?offset=${state.offset}&limit=${state.pageSize}` +
-    `&q=${encodeURIComponent(q)}&tool=${encodeURIComponent(tool)}`
-  );
+  let data;
+  try {
+    data = await api.get(
+      `/api/jobs/${jobId}/results?offset=${state.offset}&limit=${state.pageSize}` +
+      `&q=${encodeURIComponent(q)}&tool=${encodeURIComponent(tool)}`
+    );
+  } catch (e) { toast(e.message, true); return; }
   $("#resultCount").textContent = t("results.count", "결과") + `: ${data.total}`;
   const grid = $("#resultGrid");
   for (const r of data.items) grid.appendChild(renderItem(jobId, r));
@@ -282,17 +329,26 @@ async function loadResults(reset) {
   $("#loadMore").classList.toggle("hidden", state.offset >= data.total);
 }
 
+const BROKEN_IMG =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+    '<rect width="100" height="100" fill="#0d0f14"/>' +
+    '<text x="50" y="55" font-size="30" text-anchor="middle" fill="#3a4158">🖼</text></svg>'
+  );
+
 function renderItem(jobId, r) {
   const el = document.createElement("div");
   el.className = "item";
   const img = document.createElement("img");
   img.loading = "lazy";
+  img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
   img.src = `/api/image?path=${encodeURIComponent(r.file)}&thumb=true`;
   const body = document.createElement("div");
   body.className = "body";
   body.innerHTML = `
     <div class="name">${escapeHtml(r.filename)}</div>
-    <div class="prompt">${escapeHtml(r.prompt || "—")}</div>
+    <div class="prompt">${escapeHtml((r.prompt || "—").replace(/\s+/g, " "))}</div>
     <div class="tools">
       <span class="tool-badge ${r.tool}">${r.tool}</span>
       ${r.params["Size"] ? `<span class="tool-badge">${escapeHtml(r.params["Size"])}</span>` : ""}
@@ -325,25 +381,79 @@ function exportJob(format) {
 /* ---------------------------------------------------------- detail modal */
 
 async function openDetail(jobId, file) {
-  const r = await api.get(`/api/jobs/${jobId}/result?file=${encodeURIComponent(file)}`);
+  try {
+    const r = await api.get(`/api/jobs/${jobId}/result?file=${encodeURIComponent(file)}`);
+    openDetailData(r);
+  } catch (e) { toast(e.message, true); }
+}
+
+function openDetailData(r) {
   state.detail = r;
-  $("#modalTitle").textContent = r.filename;
-  $("#modalImg").src = `/api/image?path=${encodeURIComponent(r.file)}`;
-  $("#modalMeta").textContent = formatResult(r, "json");
+  $("#modalTitle").textContent = r.original_name || r.filename;
+  const img = $("#modalImg");
+  img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
+  img.src = `/api/image?path=${encodeURIComponent(r.file)}`;
+  $("#modalMeta").textContent = formatResult(r, "readable");
+  applyModalLayout();
   $("#modal").classList.remove("hidden");
 }
+
+function applyModalLayout() {
+  const vertical = localStorage.getItem("gensight.layout") === "vertical";
+  $("#modalBody").classList.toggle("vertical", vertical);
+  $("#layoutToggle").textContent = vertical ? "⇆" : "⇅";
+}
+$("#layoutToggle").onclick = () => {
+  const now = $("#modalBody").classList.contains("vertical") ? "horizontal" : "vertical";
+  localStorage.setItem("gensight.layout", now);
+  applyModalLayout();
+};
+
 $("#modalClose").onclick = () => $("#modal").classList.add("hidden");
 $("#modal").onclick = (e) => { if (e.target.id === "modal") $("#modal").classList.add("hidden"); };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") $("#modal").classList.add("hidden");
 });
+
 $$("[data-copy]").forEach((b) => {
-  b.onclick = () => {
+  b.onclick = async () => {
     if (!state.detail) return;
-    copyText(formatResult(state.detail, b.dataset.copy));
-    $("#modalMeta").textContent = formatResult(state.detail, b.dataset.copy);
+    const text = formatResult(state.detail, b.dataset.copy);
+    $("#modalMeta").textContent = text;
+    if ($("#copyWithImage").checked) {
+      await copyWithImage(state.detail, text);
+    } else {
+      copyText(text);
+    }
   };
 });
+
+async function copyWithImage(r, text) {
+  try {
+    const resp = await fetch(`/api/image?path=${encodeURIComponent(r.file)}&thumb=true`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+    const html =
+      `<div><img src="${dataUrl}" alt="${escapeHtml(r.filename)}"><br>` +
+      `<pre>${escapeHtml(text)}</pre></div>`;
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": new Blob([html], { type: "text/html" }),
+        "text/plain": new Blob([text], { type: "text/plain" }),
+      }),
+    ]);
+    toast(t("toast.copiedWithImage", "이미지와 함께 복사되었습니다"));
+  } catch {
+    // Clipboard image copy needs a secure context — fall back to text.
+    copyText(text);
+  }
+}
 
 /* ---------------------------------------------------------- formatters */
 
@@ -356,9 +466,25 @@ function orderedParams(r) {
   return out;
 }
 
+// Some tools store prompts with escaped newlines ("\n" as two chars);
+// normalize them to real line breaks for display and copy.
+function normalizeText(s) {
+  return String(s ?? "").replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+}
+
 function formatResult(r, fmt) {
   const params = orderedParams(r);
-  if (fmt === "prompt") return r.prompt;
+  const prompt = normalizeText(r.prompt);
+  const negative = normalizeText(r.negative_prompt);
+  if (fmt === "prompt") return prompt;
+  if (fmt === "readable") {
+    let s = `Prompt:\n${prompt || "—"}\n`;
+    if (negative) s += `\nNegative prompt:\n${negative}\n`;
+    s += "\n";
+    for (const [k, v] of Object.entries(params)) s += `${k}: ${v}\n`;
+    return s;
+  }
+  r = { ...r, prompt, negative_prompt: negative };
   if (fmt === "json") {
     return JSON.stringify(
       { prompt: r.prompt, negative_prompt: r.negative_prompt, ...params },
@@ -406,7 +532,11 @@ function escapeHtml(s) {
 /* ---------------------------------------------------------- init */
 
 (async function init() {
-  await loadSettings();
-  await loadLang(state.settings.language);
+  try {
+    await loadSettings();
+    await loadLang(state.settings.language);
+  } catch (e) {
+    toast(`${t("toast.loadFailed", "불러오기 실패")}: ${e.message}`, true);
+  }
   pollJobs();
 })();

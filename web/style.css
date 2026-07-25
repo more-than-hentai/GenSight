@@ -121,6 +121,17 @@ button.ghost { background: none; border: none; font-size: 16px; }
 }
 .gpu-meter { flex: 1; color: var(--muted); font-size: 12px; }
 
+/* dropzone */
+.dropzone {
+  border: 2px dashed #3a4158; border-radius: var(--radius);
+  padding: 34px 16px; text-align: center; color: var(--muted);
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.drag {
+  border-color: var(--accent); background: rgba(91,140,255,.06); color: var(--text);
+}
+.dropzone.busy { opacity: .6; pointer-events: none; }
+
 /* modal */
 .modal {
   position: fixed; inset: 0; background: rgba(0,0,0,.65);
@@ -135,11 +146,21 @@ button.ghost { background: none; border: none; font-size: 16px; }
   padding: 12px 18px; border-bottom: 1px solid #2c3140;
 }
 .modal-head h3 { margin: 0; font-size: 14px; word-break: break-all; }
+.modal-actions { display: flex; gap: 6px; align-items: center; }
 .modal-body {
   display: grid; grid-template-columns: minmax(200px, 380px) 1fr;
   gap: 16px; padding: 16px 18px; overflow: auto;
 }
 .modal-body img { width: 100%; border-radius: 10px; }
+/* stacked (상하) layout */
+.modal-body.vertical { grid-template-columns: 1fr; }
+.modal-body.vertical img {
+  width: auto; max-width: 100%; max-height: 46vh; margin: 0 auto; display: block;
+}
+.with-image {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--muted); font-size: 12.5px; margin-left: auto; cursor: pointer;
+}
 .copy-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .copy-bar span { color: var(--muted); font-size: 12.5px; }
 #modalMeta {

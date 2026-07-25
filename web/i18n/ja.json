@@ -8,6 +8,10 @@
   "scan.workers": "抽出ワーカー数",
   "scan.start": "スキャン開始",
   "scan.hint": "画像が非常に多いディレクトリでは、ワーカー数を調整して負荷を制御できます。ディレクトリはまず設定タブで登録してください。",
+  "scan.dirInput": "ディレクトリパスを直接入力、または登録済みパスを選択",
+  "scan.needDir": "ディレクトリパスを入力してください",
+  "analyze.title": "単一画像の分析",
+  "analyze.drop": "画像をここにドロップ、またはクリックしてアップロード",
   "scan.jobs": "ジョブ一覧",
   "scan.noJobs": "まだジョブがありません。",
   "scan.noDirs": "先に設定でディレクトリを追加してください",
@@ -25,6 +29,8 @@
   "results.count": "件数",
   "results.more": "もっと見る",
   "detail.copyAs": "コピー形式:",
+  "detail.readable": "表示",
+  "detail.withImage": "画像を含める",
   "detail.promptOnly": "プロンプトのみ",
   "settings.dirs": "スキャンディレクトリ",
   "settings.dirPlaceholder": "/path/to/images",
@@ -43,5 +49,9 @@
   "toast.saved": "設定を保存しました",
   "toast.dirAdded": "ディレクトリを追加しました",
   "toast.scanStarted": "スキャンを開始しました",
-  "toast.copied": "クリップボードにコピーしました"
+  "toast.copied": "クリップボードにコピーしました",
+  "toast.copiedWithImage": "画像と一緒にコピーしました",
+  "toast.analyzed": "分析完了",
+  "toast.analyzeFailed": "分析失敗",
+  "toast.loadFailed": "読み込み失敗"
 }

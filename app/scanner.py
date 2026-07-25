@@ -8,6 +8,7 @@ tuned independently.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
@@ -63,16 +64,33 @@ class ScanJob:
     # -- internals ---------------------------------------------------
 
     def _enumerate(self) -> list[Path]:
+        """Walk the directory, skipping unreadable entries instead of failing."""
         root = Path(self.directory)
         if not root.is_dir():
             raise FileNotFoundError(f"Not a directory: {root}")
-        pattern = "**/*" if self.recursive else "*"
-        files = []
-        for p in root.glob(pattern):
-            if self._cancel.is_set():
-                break
-            if p.is_file() and p.suffix.lower() in metadata.SUPPORTED_EXTENSIONS:
-                files.append(p)
+        files: list[Path] = []
+
+        def add_if_image(p: Path) -> None:
+            try:
+                if p.is_file() and p.suffix.lower() in metadata.SUPPORTED_EXTENSIONS:
+                    files.append(p)
+            except OSError:
+                pass  # broken symlink, permission issue, etc.
+
+        if self.recursive:
+            for dirpath, _dirnames, filenames in os.walk(root, onerror=lambda e: None):
+                if self._cancel.is_set():
+                    break
+                for name in filenames:
+                    add_if_image(Path(dirpath) / name)
+        else:
+            try:
+                for p in root.iterdir():
+                    if self._cancel.is_set():
+                        break
+                    add_if_image(p)
+            except OSError as e:
+                raise PermissionError(f"Cannot read directory: {root} ({e})") from e
         files.sort()
         return files
 
@@ -80,7 +98,14 @@ class ScanJob:
         def work(path: Path) -> None:
             if self._cancel.is_set():
                 return
-            item = metadata.extract(path)
+            try:
+                item = metadata.extract(path)
+            except Exception as e:  # noqa: BLE001 - never let one file kill the pool
+                item = {
+                    "file": str(path), "filename": path.name, "tool": "unknown",
+                    "prompt": "", "negative_prompt": "", "params": {}, "raw": {},
+                    "error": f"{type(e).__name__}: {e}",
+                }
             with self._lock:
                 self.results.append(item)
                 self.processed += 1
