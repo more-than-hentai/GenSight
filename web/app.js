@@ -52,6 +52,8 @@ $$(".tab").forEach((btn) =>
     $$(".panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${btn.dataset.tab}`));
     if (btn.dataset.tab === "results") refreshResultJobs();
     if (btn.dataset.tab === "settings") renderSettings();
+    if (btn.dataset.tab === "library") loadLibrary(true);
+    if (btn.dataset.tab === "stats") loadStats();
   })
 );
 
@@ -104,6 +106,10 @@ async function renderSettings() {
     list.appendChild(li);
   }
 
+  renderWatches();
+  renderGroups();
+  renderTagger();
+
   try {
     const g = await api.get("/api/gpus");
     $("#cpuInfo").textContent = `CPU cores: ${g.cpu_count}`;
@@ -129,6 +135,132 @@ async function renderSettings() {
     }
   } catch { /* gpu info is optional */ }
 }
+
+/* -------- watches / groups / tagger (settings) -------- */
+
+async function renderWatches() {
+  let data;
+  try { data = await api.get("/api/watches"); } catch { return; }
+  const box = $("#watchList");
+  box.innerHTML = "";
+  for (const w of data.watches) {
+    const li = document.createElement("li");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!w.enabled;
+    cb.onchange = async () => {
+      await api.send("PATCH", `/api/watches/${w.id}`, { enabled: cb.checked });
+    };
+    const label = document.createElement("span");
+    label.className = "grow";
+    label.textContent = `👁 ${w.directory} · ${w.poll_interval}s` +
+      (w.recursive ? "" : ` · ${t("settings.noRecursive", "하위 폴더 제외")}`);
+    const del = document.createElement("button");
+    del.textContent = t("settings.remove", "삭제");
+    del.onclick = async () => {
+      await api.send("DELETE", `/api/watches/${w.id}`);
+      renderWatches();
+    };
+    li.append(cb, label, del);
+    box.appendChild(li);
+  }
+  const st = data.watcher;
+  $("#watcherStatus").textContent =
+    `${t("settings.watcher", "감시 상태")}: ${st.running ? "✓" : "✗"}` +
+    ` · ${st.realtime ? "watchdog + polling" : "polling only"}` +
+    (st.last_error ? ` · ${st.last_error}` : "");
+}
+
+$("#addWatch").onclick = async () => {
+  const directory = $("#watchDir").value.trim();
+  if (!directory) return;
+  try {
+    await api.send("POST", "/api/watches", {
+      directory,
+      recursive: $("#watchRecursive").checked,
+      poll_interval: +$("#watchInterval").value || 30,
+    });
+    $("#watchDir").value = "";
+    toast(t("toast.saved", "설정이 저장되었습니다"));
+    renderWatches();
+  } catch (e) { toast(e.message, true); }
+};
+
+async function renderGroups() {
+  let data;
+  try { data = await api.get("/api/groups"); } catch { return; }
+  const box = $("#groupList");
+  box.innerHTML = "";
+  for (const g of data.groups) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "grow";
+    label.textContent =
+      `🏷 ${g.name} ← ${g.is_regex ? "regex" : "text"} "${g.pattern}" @ ${g.target}`;
+    const del = document.createElement("button");
+    del.textContent = t("settings.remove", "삭제");
+    del.onclick = async () => {
+      await api.send("DELETE", `/api/groups/${g.id}`);
+      renderGroups();
+    };
+    li.append(label, del);
+    box.appendChild(li);
+  }
+}
+
+$("#addGroup").onclick = async () => {
+  const name = $("#groupName").value.trim();
+  const pattern = $("#groupPattern").value.trim();
+  if (!name || !pattern) return;
+  try {
+    await api.send("POST", "/api/groups", {
+      name,
+      pattern,
+      is_regex: $("#groupRegex").checked,
+      target: $("#groupTarget").value,
+    });
+    $("#groupName").value = $("#groupPattern").value = "";
+    renderGroups();
+  } catch (e) { toast(e.message, true); }
+};
+
+$("#applyGroups").onclick = async () => {
+  try {
+    const r = await api.send("POST",
+      `/api/groups/apply?overwrite=${$("#groupOverwrite").checked}`);
+    $("#applyResult").textContent =
+      `${t("settings.applied", "적용됨")}: ${r.updated}`;
+  } catch (e) { toast(e.message, true); }
+};
+
+let taggerTimer;
+async function renderTagger() {
+  clearTimeout(taggerTimer);
+  let s;
+  try { s = await api.get("/api/tagger/status"); } catch { return; }
+  let text;
+  if (!s.available) {
+    text = s.reason;
+  } else if (s.job && s.job.status === "running") {
+    text = `${t("status.extracting", "추출중")} ${s.job.processed}/${s.job.total}`;
+    taggerTimer = setTimeout(renderTagger, 1500);
+  } else {
+    text = `${t("settings.untagged", "미태깅")}: ${s.untagged}` +
+      (s.job ? ` · ${t("status." + s.job.status, s.job.status)}` : "");
+  }
+  $("#taggerStatus").textContent = text;
+}
+
+$("#taggerRun").onclick = async () => {
+  try {
+    await api.send("POST", "/api/tagger/run", {});
+    renderTagger();
+  } catch (e) { toast(e.message, true); }
+};
+$("#taggerCancel").onclick = async () => {
+  try { await api.send("POST", "/api/tagger/cancel"); } catch {}
+  renderTagger();
+};
 
 $("#addDir").onclick = async () => {
   const path = $("#newDir").value.trim();
@@ -378,6 +510,185 @@ function exportJob(format) {
   if (jobId) window.open(`/api/jobs/${jobId}/export?format=${format}`, "_blank");
 }
 
+/* ---------------------------------------------------------- library */
+
+const lib = { offset: 0, dupes: false };
+
+function libParams() {
+  const p = new URLSearchParams({
+    q: $("#libSearch").value,
+    tool: $("#libTool").value,
+    min_rating: $("#libRating").value,
+    group: $("#libGroup").value,
+    sort: $("#libSort").value,
+    offset: lib.offset,
+    limit: state.pageSize,
+  });
+  if ($("#libFav").classList.contains("on")) p.set("favorite", "true");
+  return p;
+}
+
+async function loadLibrary(reset) {
+  if (lib.dupes) { loadDuplicates(); return; }
+  if (reset) { lib.offset = 0; $("#libGrid").innerHTML = ""; }
+  let data;
+  try {
+    data = await api.get(`/api/library?${libParams()}`);
+  } catch (e) { toast(e.message, true); return; }
+  $("#libCount").textContent = t("results.count", "결과") + `: ${data.total}`;
+  const groupSel = $("#libGroup");
+  const prevGroup = groupSel.value;
+  while (groupSel.options.length > 1) groupSel.remove(1);
+  for (const g of data.groups) {
+    const o = document.createElement("option");
+    o.value = o.textContent = g;
+    groupSel.appendChild(o);
+  }
+  groupSel.value = prevGroup;
+  const grid = $("#libGrid");
+  for (const r of data.items) grid.appendChild(renderLibItem(r));
+  lib.offset += data.items.length;
+  $("#libMore").classList.toggle("hidden", lib.offset >= data.total);
+}
+
+async function loadDuplicates() {
+  $("#libGrid").innerHTML = "";
+  $("#libMore").classList.add("hidden");
+  let data;
+  try {
+    data = await api.get("/api/library/duplicates");
+  } catch (e) { toast(e.message, true); return; }
+  $("#libCount").textContent =
+    t("lib.dupeGroups", "중복 그룹") + `: ${data.groups.length}`;
+  const grid = $("#libGrid");
+  if (!data.groups.length) {
+    grid.innerHTML = `<p class="hint">${t("lib.noDupes", "중복 이미지가 없습니다.")}</p>`;
+    return;
+  }
+  data.groups.forEach((g, i) => {
+    const head = document.createElement("div");
+    head.className = "dupe-head";
+    head.textContent = `#${i + 1} — ${g.count} ${t("lib.files", "개 파일")}`;
+    grid.appendChild(head);
+    for (const r of g.items) grid.appendChild(renderLibItem(r));
+  });
+}
+
+function starSpan(rating, onSet) {
+  const span = document.createElement("span");
+  span.className = "stars";
+  for (let i = 1; i <= 5; i++) {
+    const s = document.createElement("span");
+    s.className = "s" + (i <= rating ? " on" : "");
+    s.textContent = "★";
+    s.onclick = (e) => { e.stopPropagation(); onSet(i === rating ? 0 : i); };
+    span.appendChild(s);
+  }
+  return span;
+}
+
+function renderLibItem(r) {
+  const el = document.createElement("div");
+  el.className = "item";
+  const img = document.createElement("img");
+  img.loading = "lazy";
+  img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
+  img.src = `/api/image?path=${encodeURIComponent(r.file)}&thumb=true`;
+  const body = document.createElement("div");
+  body.className = "body";
+  body.innerHTML = `
+    <div class="name">${escapeHtml(r.filename)}</div>
+    <div class="prompt">${escapeHtml((r.prompt || "—").replace(/\s+/g, " "))}</div>
+    <div class="tools">
+      <span class="tool-badge ${r.tool}">${r.tool}</span>
+      ${r.group_name ? `<span class="tool-badge">${escapeHtml(r.group_name)}</span>` : ""}
+      ${typeof r.distance === "number" ? `<span class="tool-badge">d=${r.distance}</span>` : ""}
+    </div>`;
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.appendChild(starSpan(r.rating, async (v) => {
+    const updated = await patchMeta(r.file, { rating: v });
+    if (updated) { r.rating = updated.rating; el.replaceWith(renderLibItem(r)); }
+  }));
+  const fav = document.createElement("button");
+  fav.className = "fav-btn" + (r.favorite ? " on" : "");
+  fav.textContent = r.favorite ? "♥" : "♡";
+  fav.onclick = async (e) => {
+    e.stopPropagation();
+    const updated = await patchMeta(r.file, { favorite: !r.favorite });
+    if (updated) { r.favorite = updated.favorite; el.replaceWith(renderLibItem(r)); }
+  };
+  overlay.appendChild(fav);
+  body.appendChild(overlay);
+  el.append(img, body);
+  el.onclick = () => openLibraryDetail(r.file);
+  return el;
+}
+
+async function patchMeta(path, fields) {
+  try {
+    return await api.send("PATCH", "/api/library/item", { path, ...fields });
+  } catch (e) { toast(e.message, true); return null; }
+}
+
+async function openLibraryDetail(path) {
+  try {
+    const r = await api.get(`/api/library/item?path=${encodeURIComponent(path)}`);
+    openDetailData(r, { library: true });
+  } catch (e) { toast(e.message, true); }
+}
+
+$("#libTool").onchange = $("#libRating").onchange =
+$("#libGroup").onchange = $("#libSort").onchange = () => loadLibrary(true);
+$("#libMore").onclick = () => loadLibrary(false);
+$("#libFav").onclick = () => {
+  $("#libFav").classList.toggle("on");
+  loadLibrary(true);
+};
+$("#libDupes").onclick = () => {
+  lib.dupes = !lib.dupes;
+  $("#libDupes").classList.toggle("on", lib.dupes);
+  loadLibrary(true);
+};
+let libSearchTimer;
+$("#libSearch").oninput = () => {
+  clearTimeout(libSearchTimer);
+  libSearchTimer = setTimeout(() => loadLibrary(true), 300);
+};
+
+/* ---------------------------------------------------------- stats */
+
+function barRows(container, rows, unit) {
+  container.innerHTML = "";
+  if (!rows.length) {
+    container.innerHTML = `<p class="hint">—</p>`;
+    return;
+  }
+  const max = rows[0].count || 1;
+  for (const r of rows) {
+    const el = document.createElement("div");
+    el.className = "bar-row";
+    el.innerHTML = `
+      <span class="label" title="${escapeHtml(r.token)}">${escapeHtml(r.token)}</span>
+      <span class="bar"><div style="width:${Math.round((r.count / max) * 100)}%"></div></span>
+      <span class="count">${r.count}${unit || ""}</span>`;
+    container.appendChild(el);
+  }
+}
+
+async function loadStats() {
+  let s;
+  try {
+    s = await api.get("/api/stats/prompts?top=40");
+  } catch (e) { toast(e.message, true); return; }
+  $("#statsSummary").textContent =
+    `${t("stats.images", "분석된 이미지")}: ${s.images}`;
+  barRows($("#statsPos"), s.positive);
+  barRows($("#statsNeg"), s.negative);
+  barRows($("#statsModels"), s.models);
+  barRows($("#statsSamplers"), s.samplers);
+}
+
 /* ---------------------------------------------------------- detail modal */
 
 async function openDetail(jobId, file) {
@@ -387,13 +698,62 @@ async function openDetail(jobId, file) {
   } catch (e) { toast(e.message, true); }
 }
 
-function openDetailData(r) {
+function openDetailData(r, opts = {}) {
   state.detail = r;
   $("#modalTitle").textContent = r.original_name || r.filename;
   const img = $("#modalImg");
   img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
   img.src = `/api/image?path=${encodeURIComponent(r.file)}`;
   $("#modalMeta").textContent = formatResult(r, "readable");
+
+  // Library-only controls: rating / favorite / group / tags / similar
+  const controls = $("#modalControls");
+  controls.classList.toggle("hidden", !opts.library);
+  if (opts.library) {
+    const starsBox = $("#modalStars");
+    starsBox.innerHTML = "";
+    starsBox.appendChild(starSpan(r.rating || 0, async (v) => {
+      const updated = await patchMeta(r.file, { rating: v });
+      if (updated) openDetailData(updated, opts);
+    }));
+    const fav = $("#modalFav");
+    fav.textContent = r.favorite ? "♥" : "♡";
+    fav.classList.toggle("on", !!r.favorite);
+    fav.onclick = async () => {
+      const updated = await patchMeta(r.file, { favorite: !r.favorite });
+      if (updated) openDetailData(updated, opts);
+    };
+    const groupBadge = $("#modalGroup");
+    groupBadge.classList.toggle("hidden", !r.group_name);
+    groupBadge.textContent = r.group_name || "";
+  }
+
+  const tagsBox = $("#modalTags");
+  const tags = Array.isArray(r.tags) ? r.tags : [];
+  tagsBox.classList.toggle("hidden", !tags.length);
+  tagsBox.innerHTML = tags.map((x) => `<span>${escapeHtml(x)}</span>`).join("");
+
+  const simBox = $("#similarBox");
+  simBox.classList.add("hidden");
+  if (r.phash) {
+    api.get(`/api/library/similar?path=${encodeURIComponent(r.file)}&max_distance=10`)
+      .then((d) => {
+        if (state.detail !== r || !d.items.length) return;
+        simBox.classList.remove("hidden");
+        const strip = $("#similarStrip");
+        strip.innerHTML = "";
+        for (const s of d.items) {
+          const im = document.createElement("img");
+          im.title = `${s.filename} (d=${s.distance})`;
+          im.onerror = () => { im.onerror = null; im.src = BROKEN_IMG; };
+          im.src = `/api/image?path=${encodeURIComponent(s.file)}&thumb=true`;
+          im.onclick = () => openLibraryDetail(s.file);
+          strip.appendChild(im);
+        }
+      })
+      .catch(() => {});
+  }
+
   applyModalLayout();
   $("#modal").classList.remove("hidden");
 }

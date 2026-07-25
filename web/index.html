@@ -11,7 +11,9 @@
   <div class="brand">🔎 GenSight</div>
   <nav>
     <button class="tab active" data-tab="scan" data-i18n="tab.scan">스캔</button>
+    <button class="tab" data-tab="library" data-i18n="tab.library">라이브러리</button>
     <button class="tab" data-tab="results" data-i18n="tab.results">결과</button>
+    <button class="tab" data-tab="stats" data-i18n="tab.stats">통계</button>
     <button class="tab" data-tab="settings" data-i18n="tab.settings">설정</button>
   </nav>
   <select id="langSelect" title="Language">
@@ -60,6 +62,48 @@
     </div>
   </section>
 
+  <!-- ============================ Library tab -->
+  <section id="tab-library" class="panel">
+    <div class="card">
+      <div class="row wrap">
+        <input type="search" id="libSearch" data-i18n-ph="results.search"
+               placeholder="프롬프트/파일명/모델 검색">
+        <select id="libTool">
+          <option value="" data-i18n="results.allTools">전체 도구</option>
+          <option value="a1111">A1111/Forge</option>
+          <option value="comfyui">ComfyUI</option>
+          <option value="novelai">NovelAI</option>
+          <option value="unknown" data-i18n="results.unknown">메타데이터 없음</option>
+        </select>
+        <select id="libRating">
+          <option value="0">★ 0+</option>
+          <option value="1">★ 1+</option>
+          <option value="2">★ 2+</option>
+          <option value="3">★ 3+</option>
+          <option value="4">★ 4+</option>
+          <option value="5">★ 5</option>
+        </select>
+        <button id="libFav" class="toggle-btn" title="즐겨찾기만">♥</button>
+        <select id="libGroup">
+          <option value="" data-i18n="lib.allGroups">전체 그룹</option>
+        </select>
+        <select id="libSort">
+          <option value="recent" data-i18n="lib.sortRecent">최신순</option>
+          <option value="oldest" data-i18n="lib.sortOldest">오래된순</option>
+          <option value="rating" data-i18n="lib.sortRating">평점순</option>
+          <option value="name" data-i18n="lib.sortName">이름순</option>
+        </select>
+        <button id="libDupes" data-i18n="lib.dupes">중복 보기</button>
+        <span class="spacer"></span>
+        <span id="libCount" class="hint"></span>
+      </div>
+    </div>
+    <div id="libGrid" class="grid"></div>
+    <div class="row center">
+      <button id="libMore" class="hidden" data-i18n="results.more">더 보기</button>
+    </div>
+  </section>
+
   <!-- ============================ Results tab -->
   <section id="tab-results" class="panel">
     <div class="card">
@@ -83,6 +127,37 @@
     <div id="resultGrid" class="grid"></div>
     <div class="row center">
       <button id="loadMore" class="hidden" data-i18n="results.more">더 보기</button>
+    </div>
+  </section>
+
+  <!-- ============================ Stats tab -->
+  <section id="tab-stats" class="panel">
+    <div class="card">
+      <h2 data-i18n="stats.tokens">프롬프트 토큰 TOP</h2>
+      <p class="hint" id="statsSummary"></p>
+      <div class="stats-cols">
+        <div>
+          <h3 data-i18n="stats.positive">Positive</h3>
+          <div id="statsPos"></div>
+        </div>
+        <div>
+          <h3 data-i18n="stats.negative">Negative</h3>
+          <div id="statsNeg"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2 data-i18n="stats.modelsSamplers">모델 / 샘플러</h2>
+      <div class="stats-cols">
+        <div>
+          <h3 data-i18n="stats.models">모델</h3>
+          <div id="statsModels"></div>
+        </div>
+        <div>
+          <h3 data-i18n="stats.samplers">샘플러</h3>
+          <div id="statsSamplers"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -111,6 +186,57 @@
         <input type="number" id="setMaxJobs" min="1" max="8" class="num">
       </div>
       <p class="hint" id="cpuInfo"></p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.watches">폴더 자동 감시</h2>
+      <div class="row wrap">
+        <input type="text" id="watchDir" class="grow"
+               data-i18n-ph="settings.dirPlaceholder" placeholder="/path/to/images">
+        <label><input type="checkbox" id="watchRecursive" checked>
+          <span data-i18n="scan.recursive">하위 폴더 포함</span></label>
+        <label data-i18n="settings.interval">폴링 주기(초)</label>
+        <input type="number" id="watchInterval" min="5" value="30" class="num">
+        <button id="addWatch" class="primary" data-i18n="settings.add">추가</button>
+      </div>
+      <ul id="watchList" class="dir-list"></ul>
+      <p class="hint" id="watcherStatus"></p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.groups">그룹 자동 분류</h2>
+      <div class="row wrap">
+        <input type="text" id="groupName" data-i18n-ph="settings.groupName" placeholder="그룹명">
+        <input type="text" id="groupPattern" class="grow"
+               data-i18n-ph="settings.groupPattern" placeholder="매칭 문자열 또는 정규식">
+        <label><input type="checkbox" id="groupRegex"> regex</label>
+        <select id="groupTarget">
+          <option value="prompt" data-i18n="settings.targetPrompt">프롬프트</option>
+          <option value="filename" data-i18n="settings.targetFilename">파일명</option>
+          <option value="model" data-i18n="settings.targetModel">모델</option>
+        </select>
+        <button id="addGroup" class="primary" data-i18n="settings.add">추가</button>
+      </div>
+      <ul id="groupList" class="dir-list"></ul>
+      <div class="row">
+        <button id="applyGroups" data-i18n="settings.groupApply">지금 적용</button>
+        <label><input type="checkbox" id="groupOverwrite">
+          <span data-i18n="settings.overwrite">기존 그룹 덮어쓰기</span></label>
+        <span id="applyResult" class="hint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.tagger">WD Tagger 자동 태깅</h2>
+      <div class="row">
+        <button id="taggerRun" class="primary" data-i18n="settings.taggerRun">태깅 실행</button>
+        <button id="taggerCancel" data-i18n="scan.cancel">취소</button>
+        <span id="taggerStatus" class="hint"></span>
+      </div>
+      <p class="hint" data-i18n="settings.taggerHint">
+        선택 설치 기능입니다: pip install -r requirements-ml.txt (onnxruntime-gpu).
+        설정된 GPU에 작업이 분배됩니다.
+      </p>
     </div>
 
     <div class="card">
@@ -157,7 +283,17 @@
             <span data-i18n="detail.withImage">이미지 포함</span>
           </label>
         </div>
+        <div id="modalControls" class="meta-controls hidden">
+          <span id="modalStars" class="stars"></span>
+          <button id="modalFav" class="fav-btn">♡</button>
+          <span id="modalGroup" class="tool-badge hidden"></span>
+        </div>
         <pre id="modalMeta"></pre>
+        <div id="modalTags" class="tag-chips hidden"></div>
+        <div id="similarBox" class="hidden">
+          <h4 data-i18n="lib.similar">유사 이미지</h4>
+          <div id="similarStrip" class="similar-strip"></div>
+        </div>
       </div>
     </div>
   </div>

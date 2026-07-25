@@ -1,0 +1,212 @@
+"""WD Tagger auto-tagging (optional ML feature, multi-GPU capable).
+
+Heavy dependencies (onnxruntime, numpy, huggingface_hub) are NOT part
+of the base install — see requirements-ml.txt. Everything here degrades
+gracefully: the API reports "unavailable" with an install hint instead
+of failing at import time.
+
+GPU distribution: one ONNX session per enabled GPU (settings.gpu
+.enabled_devices), each driving `jobs_per_gpu` worker threads that pull
+from a shared queue. Without GPUs (or with onnxruntime CPU build) a
+single CPU session is used.
+"""
+from __future__ import annotations
+
+import csv
+import logging
+import queue
+import threading
+from pathlib import Path
+
+from PIL import Image
+
+from . import config, db
+
+logger = logging.getLogger("gensight.tagger")
+
+MODEL_REPO = "SmilingWolf/wd-swinv2-tagger-v3"
+GENERAL_THRESHOLD = 0.35
+CHARACTER_THRESHOLD = 0.85
+INSTALL_HINT = "pip install -r requirements-ml.txt"
+
+
+class TaggerUnavailable(RuntimeError):
+    pass
+
+
+def _load_deps():
+    try:
+        import numpy
+        import onnxruntime
+        from huggingface_hub import hf_hub_download
+    except ImportError as e:
+        raise TaggerUnavailable(
+            f"ML dependency missing: {e.name}. Install with: {INSTALL_HINT}"
+        ) from e
+    return numpy, onnxruntime, hf_hub_download
+
+
+def deps_available() -> tuple[bool, str | None]:
+    try:
+        _load_deps()
+        return True, None
+    except TaggerUnavailable as e:
+        return False, str(e)
+
+
+def _load_labels(csv_path: str) -> tuple[list[str], list[int]]:
+    names, categories = [], []
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            names.append(row["name"].replace("_", " "))
+            categories.append(int(row["category"]))
+    return names, categories
+
+
+def _preprocess(np, path: str, size: int):
+    with Image.open(path) as img:
+        img = img.convert("RGBA")
+        canvas = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        canvas.alpha_composite(img)
+        img = canvas.convert("RGB")
+        w, h = img.size
+        side = max(w, h)
+        square = Image.new("RGB", (side, side), (255, 255, 255))
+        square.paste(img, ((side - w) // 2, (side - h) // 2))
+        square = square.resize((size, size), Image.BICUBIC)
+    arr = np.asarray(square, dtype=np.float32)[:, :, ::-1]  # RGB -> BGR
+    return np.expand_dims(arr, 0)
+
+
+class TagJob:
+    def __init__(self, total: int):
+        self.total = total
+        self.processed = 0
+        self.errors = 0
+        self.status = "running"  # running | done | error | cancelled
+        self.error: str | None = None
+        self.lock = threading.Lock()
+
+    def summary(self) -> dict:
+        return {
+            "status": self.status, "total": self.total,
+            "processed": self.processed, "errors": self.errors,
+            "error": self.error,
+        }
+
+
+class TaggerManager:
+    def __init__(self) -> None:
+        self.job: TagJob | None = None
+        self._cancel = threading.Event()
+        self._lock = threading.Lock()
+
+    def status(self) -> dict:
+        ok, reason = deps_available()
+        untagged = len(db.untagged_paths())
+        return {
+            "available": ok,
+            "reason": reason,
+            "model": MODEL_REPO,
+            "untagged": untagged,
+            "job": self.job.summary() if self.job else None,
+        }
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self, limit: int | None = None) -> dict:
+        with self._lock:
+            if self.job and self.job.status == "running":
+                raise RuntimeError("tagging already running")
+            _load_deps()  # raise early with the install hint
+            paths = db.untagged_paths(limit)
+            if not paths:
+                raise RuntimeError("no untagged images")
+            self.job = TagJob(len(paths))
+            self._cancel.clear()
+            threading.Thread(
+                target=self._run, args=(self.job, paths), daemon=True
+            ).start()
+            return self.job.summary()
+
+    # -- worker side -------------------------------------------------
+
+    def _run(self, job: TagJob, paths: list[str]) -> None:
+        try:
+            np, ort, hf_hub_download = _load_deps()
+            model_path = hf_hub_download(MODEL_REPO, "model.onnx")
+            labels_path = hf_hub_download(MODEL_REPO, "selected_tags.csv")
+            names, categories = _load_labels(labels_path)
+
+            settings = config.load_settings()
+            devices = settings["gpu"]["enabled_devices"]
+            jobs_per_gpu = max(1, int(settings["gpu"]["jobs_per_gpu"]))
+            available = ort.get_available_providers()
+
+            sessions = []
+            if devices and "CUDAExecutionProvider" in available:
+                for d in devices:
+                    sessions.append(
+                        ort.InferenceSession(
+                            model_path,
+                            providers=[
+                                ("CUDAExecutionProvider", {"device_id": int(d)}),
+                                "CPUExecutionProvider",
+                            ],
+                        )
+                    )
+            else:
+                sessions.append(
+                    ort.InferenceSession(
+                        model_path, providers=["CPUExecutionProvider"]
+                    )
+                )
+                jobs_per_gpu = 1
+
+            work_q: queue.Queue[str] = queue.Queue()
+            for p in paths:
+                work_q.put(p)
+
+            def worker(session) -> None:
+                input_meta = session.get_inputs()[0]
+                size = input_meta.shape[1] if isinstance(input_meta.shape[1], int) else 448
+                while not self._cancel.is_set():
+                    try:
+                        path = work_q.get_nowait()
+                    except queue.Empty:
+                        return
+                    try:
+                        batch = _preprocess(np, path, size)
+                        probs = session.run(None, {input_meta.name: batch})[0][0]
+                        tags = []
+                        for name, cat, p in zip(names, categories, probs):
+                            if cat == 0 and p >= GENERAL_THRESHOLD:
+                                tags.append(name)
+                            elif cat == 4 and p >= CHARACTER_THRESHOLD:
+                                tags.append(f"character:{name}")
+                        db.set_tags(path, tags)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("tagging failed for %s: %s", path, e)
+                        with job.lock:
+                            job.errors += 1
+                    finally:
+                        with job.lock:
+                            job.processed += 1
+
+            threads = []
+            for session in sessions:
+                for _ in range(jobs_per_gpu):
+                    t = threading.Thread(target=worker, args=(session,), daemon=True)
+                    t.start()
+                    threads.append(t)
+            for t in threads:
+                t.join()
+            job.status = "cancelled" if self._cancel.is_set() else "done"
+        except Exception as e:  # noqa: BLE001
+            job.status = "error"
+            job.error = f"{type(e).__name__}: {e}"
+            logger.exception("tag job failed")
+
+
+tagger_manager = TaggerManager()

@@ -15,12 +15,20 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
-from . import __version__, config, gpu, metadata
+from . import __version__, config, db, gpu, metadata
+from . import stats as stats_mod
 from .scanner import manager
+from .tagger import TaggerUnavailable, tagger_manager
+from .watcher import watch_manager
 
 logger = logging.getLogger("gensight")
 
 app = FastAPI(title="GenSight", version=__version__)
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    watch_manager.start()
 
 WEB_DIR = config.BASE_DIR / "web"
 
@@ -87,6 +95,11 @@ def _validate_path(raw: str) -> Path:
             if p.is_file():
                 return p
             raise HTTPException(404, "file not found")
+    # Library entries (from watches or past sessions) are also servable
+    if db.has_image(str(p)):
+        if p.is_file():
+            return p
+        raise HTTPException(404, "file not found")
     raise HTTPException(403, "path outside configured directories")
 
 
@@ -272,6 +285,184 @@ def export_job(job_id: str, format: str = "json"):
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{stem}.json"'},
     )
+
+
+# ---------------------------------------------------------------- library
+
+
+class MetaPatch(BaseModel):
+    path: str
+    rating: int | None = None
+    favorite: bool | None = None
+    group_name: str | None = None
+
+
+class WatchBody(BaseModel):
+    directory: str
+    recursive: bool = True
+    poll_interval: float = 30
+
+
+class WatchPatch(BaseModel):
+    enabled: bool | None = None
+    poll_interval: float | None = None
+
+
+class GroupBody(BaseModel):
+    name: str
+    pattern: str
+    is_regex: bool = False
+    target: str = "prompt"
+
+
+class TaggerBody(BaseModel):
+    limit: int | None = None
+
+
+@app.get("/api/library")
+def library(
+    q: str = "",
+    tool: str = "",
+    favorite: bool | None = None,
+    min_rating: int = 0,
+    group: str = "",
+    sort: str = "recent",
+    offset: int = 0,
+    limit: int = 60,
+):
+    total, items = db.query_images(
+        q=q, tool=tool, favorite=favorite, min_rating=min_rating,
+        group=group, sort=sort, offset=offset, limit=min(limit, 500),
+    )
+    return {"total": total, "offset": offset, "items": items,
+            "groups": db.group_names()}
+
+
+@app.get("/api/library/item")
+def library_item(path: str = Query(...)):
+    item = db.get_image(path)
+    if not item:
+        raise HTTPException(404, "not in library")
+    return item
+
+
+@app.patch("/api/library/item")
+def library_item_patch(patch: MetaPatch):
+    if not db.has_image(patch.path):
+        raise HTTPException(404, "not in library")
+    return db.set_meta(
+        patch.path, rating=patch.rating, favorite=patch.favorite,
+        group_name=patch.group_name,
+    )
+
+
+@app.get("/api/library/similar")
+def library_similar(path: str = Query(...), max_distance: int = 10, limit: int = 30):
+    return {"items": db.similar_images(path, max(0, min(max_distance, 32)), limit)}
+
+
+@app.get("/api/library/duplicates")
+def library_duplicates(limit: int = 100):
+    return {"groups": db.duplicate_groups(min(limit, 500))}
+
+
+@app.get("/api/library/summary")
+def library_summary():
+    return db.summary()
+
+
+@app.get("/api/stats/prompts")
+def prompt_stats(top: int = 50):
+    return stats_mod.collect(top=max(1, min(top, 200)))
+
+
+# ---------------------------------------------------------------- watches
+
+
+@app.get("/api/watches")
+def get_watches():
+    return {"watches": db.list_watches(), "watcher": watch_manager.status()}
+
+
+@app.post("/api/watches")
+def post_watch(body: WatchBody):
+    p = Path(body.directory).expanduser()
+    try:
+        p = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(400, f"directory not found: {body.directory}")
+    if not p.is_dir():
+        raise HTTPException(400, f"not a directory: {p}")
+    return db.add_watch(str(p), body.recursive, body.poll_interval)
+
+
+@app.patch("/api/watches/{watch_id}")
+def patch_watch(watch_id: int, patch: WatchPatch):
+    db.update_watch(watch_id, enabled=patch.enabled,
+                    poll_interval=patch.poll_interval)
+    return {"ok": True}
+
+
+@app.delete("/api/watches/{watch_id}")
+def remove_watch(watch_id: int):
+    db.delete_watch(watch_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- groups
+
+
+@app.get("/api/groups")
+def get_groups():
+    return {"groups": db.list_groups()}
+
+
+@app.post("/api/groups")
+def post_group(body: GroupBody):
+    import re as _re
+
+    try:
+        return db.add_group(body.name.strip(), body.pattern, body.is_regex,
+                            body.target)
+    except _re.error as e:
+        raise HTTPException(400, f"invalid regex: {e}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/groups/{group_id}")
+def remove_group(group_id: int):
+    db.delete_group(group_id)
+    return {"ok": True}
+
+
+@app.post("/api/groups/apply")
+def apply_groups(overwrite: bool = False):
+    return {"updated": db.apply_groups(overwrite=overwrite)}
+
+
+# ---------------------------------------------------------------- tagger
+
+
+@app.get("/api/tagger/status")
+def tagger_status():
+    return tagger_manager.status()
+
+
+@app.post("/api/tagger/run")
+def tagger_run(body: TaggerBody):
+    try:
+        return tagger_manager.run(limit=body.limit)
+    except TaggerUnavailable as e:
+        raise HTTPException(409, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/tagger/cancel")
+def tagger_cancel():
+    tagger_manager.cancel()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- images

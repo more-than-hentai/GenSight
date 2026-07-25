@@ -34,6 +34,35 @@ Base URL: `http://127.0.0.1:8090`
 | GET | `/api/jobs/{id}/export?format=json\|csv` | 전체 결과 다운로드 |
 | GET | `/api/image?path=...&thumb=true\|false` | 이미지/썸네일 서빙 (허용 경로 하위만) |
 
+## 라이브러리 (SQLite 영구 저장)
+
+| Method | Path | 설명 |
+|---|---|---|
+| GET | `/api/library?q&tool&favorite&min_rating&group&sort&offset&limit` | 라이브러리 검색/필터 (sort: recent/oldest/rating/name) |
+| GET | `/api/library/item?path=...` | 단일 항목 상세 |
+| PATCH | `/api/library/item` | `{"path", "rating"?, "favorite"?, "group_name"?}` |
+| GET | `/api/library/similar?path&max_distance&limit` | 유사 이미지 (dHash 해밍 거리) |
+| GET | `/api/library/duplicates` | 동일 해시 중복 그룹 |
+| GET | `/api/library/summary` | 총계/도구별/즐겨찾기/태깅 수 |
+| GET | `/api/stats/prompts?top` | 프롬프트 토큰·모델·샘플러 통계 |
+
+## 폴더 감시 / 그룹 / 태깅
+
+| Method | Path | 설명 |
+|---|---|---|
+| GET | `/api/watches` | 감시 목록 + 감시 스레드 상태 |
+| POST | `/api/watches` | `{"directory", "recursive"?, "poll_interval"?}` |
+| PATCH | `/api/watches/{id}` | `{"enabled"?, "poll_interval"?}` |
+| DELETE | `/api/watches/{id}` | 감시 삭제 |
+| GET/POST | `/api/groups` | 분류 규칙 목록/추가 `{"name","pattern","is_regex"?,"target"?}` |
+| DELETE | `/api/groups/{id}` | 규칙 삭제 |
+| POST | `/api/groups/apply?overwrite=` | 규칙 일괄 적용 |
+| GET | `/api/tagger/status` | WD Tagger 가용성/진행 상태 |
+| POST | `/api/tagger/run` | 태깅 시작 `{"limit"?}` (ML 미설치 시 409) |
+| POST | `/api/tagger/cancel` | 태깅 취소 |
+
+MCP 서버는 [mcp.md](mcp.md) 참조.
+
 ## 결과 객체
 
 ```json

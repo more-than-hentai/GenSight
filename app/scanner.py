@@ -8,6 +8,7 @@ tuned independently.
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -16,9 +17,34 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from . import config, metadata
+from . import config, db, imghash, metadata
+
+logger = logging.getLogger("gensight.scanner")
 
 MAX_WORKERS = 32
+
+
+def process_and_store(path: Path | str) -> dict[str, Any]:
+    """Extract metadata + perceptual hash and persist to the library DB.
+
+    Shared by scan jobs and the folder watcher. Never raises.
+    """
+    path = Path(path)
+    try:
+        item = metadata.extract(path)
+    except Exception as e:  # noqa: BLE001
+        item = {
+            "file": str(path), "filename": path.name, "tool": "unknown",
+            "prompt": "", "negative_prompt": "", "params": {}, "raw": {},
+            "error": f"{type(e).__name__}: {e}",
+        }
+    phash = None if item["error"] else imghash.dhash(path)
+    item["phash"] = phash
+    try:
+        db.upsert_image(item, phash)
+    except Exception:  # noqa: BLE001 - DB hiccup must not kill the scan
+        logger.exception("db upsert failed for %s", path)
+    return item
 
 
 class ScanJob:
@@ -98,14 +124,7 @@ class ScanJob:
         def work(path: Path) -> None:
             if self._cancel.is_set():
                 return
-            try:
-                item = metadata.extract(path)
-            except Exception as e:  # noqa: BLE001 - never let one file kill the pool
-                item = {
-                    "file": str(path), "filename": path.name, "tool": "unknown",
-                    "prompt": "", "negative_prompt": "", "params": {}, "raw": {},
-                    "error": f"{type(e).__name__}: {e}",
-                }
+            item = process_and_store(path)
             with self._lock:
                 self.results.append(item)
                 self.processed += 1

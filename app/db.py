@@ -1,0 +1,455 @@
+"""SQLite persistence layer.
+
+Stores every scanned image (metadata survives restarts), watch folders,
+and auto-classification group rules. Connections are per-thread with
+WAL journaling so scan workers, the watcher thread and API requests
+can read/write concurrently.
+"""
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+from . import config, imghash
+
+_local = threading.local()
+# Guards first-time schema creation: concurrent CREATE TABLE IF NOT
+# EXISTS from multiple threads can still race inside SQLite.
+_schema_lock = threading.Lock()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS images (
+  path            TEXT PRIMARY KEY,
+  filename        TEXT NOT NULL,
+  mtime           REAL,
+  size            INTEGER,
+  tool            TEXT DEFAULT 'unknown',
+  prompt          TEXT NOT NULL DEFAULT '',
+  negative_prompt TEXT NOT NULL DEFAULT '',
+  params          TEXT NOT NULL DEFAULT '{}',
+  phash           TEXT,
+  error           TEXT,
+  rating          INTEGER NOT NULL DEFAULT 0,
+  favorite        INTEGER NOT NULL DEFAULT 0,
+  group_name      TEXT,
+  tags            TEXT,
+  scanned_at      REAL
+);
+CREATE INDEX IF NOT EXISTS idx_images_tool  ON images(tool);
+CREATE INDEX IF NOT EXISTS idx_images_group ON images(group_name);
+CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash);
+
+CREATE TABLE IF NOT EXISTS watches (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  directory     TEXT UNIQUE NOT NULL,
+  recursive     INTEGER NOT NULL DEFAULT 1,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  poll_interval REAL NOT NULL DEFAULT 30,
+  last_scan     REAL
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  name     TEXT UNIQUE NOT NULL,
+  pattern  TEXT NOT NULL,
+  is_regex INTEGER NOT NULL DEFAULT 0,
+  target   TEXT NOT NULL DEFAULT 'prompt'
+);
+"""
+
+
+def _db_path() -> Path:
+    return Path(config.DATA_DIR) / "gensight.db"
+
+
+def connect() -> sqlite3.Connection:
+    cache = getattr(_local, "conns", None)
+    if cache is None:
+        cache = _local.conns = {}
+    key = str(_db_path())
+    conn = cache.get(key)
+    if conn is None:
+        Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
+        # Serialize connection setup: switching a fresh DB to WAL and
+        # creating the schema can deadlock (immediate SQLITE_BUSY, the
+        # busy timeout does not apply) against a concurrent writer.
+        with _schema_lock:
+            conn = sqlite3.connect(key, timeout=30)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=30000")
+            for attempt in range(5):
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.executescript(SCHEMA)
+                    break
+                except sqlite3.OperationalError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.2)
+        cache[key] = conn
+    return conn
+
+
+def _row_to_item(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    try:
+        d["params"] = json.loads(d.get("params") or "{}")
+    except json.JSONDecodeError:
+        d["params"] = {}
+    if d.get("tags"):
+        try:
+            d["tags"] = json.loads(d["tags"])
+        except json.JSONDecodeError:
+            d["tags"] = []
+    # Keep the shape the frontend already understands
+    d["file"] = d["path"]
+    d["favorite"] = bool(d["favorite"])
+    return d
+
+
+# ---------------------------------------------------------------- images
+
+
+def upsert_image(r: dict, phash: str | None = None) -> None:
+    p = Path(r["file"])
+    try:
+        st = p.stat()
+        mtime, size = st.st_mtime, st.st_size
+    except OSError:
+        mtime, size = None, None
+    conn = connect()
+    with conn:
+        conn.execute(
+            """INSERT INTO images
+               (path, filename, mtime, size, tool, prompt, negative_prompt,
+                params, phash, error, scanned_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(path) DO UPDATE SET
+                 filename=excluded.filename, mtime=excluded.mtime,
+                 size=excluded.size, tool=excluded.tool,
+                 prompt=excluded.prompt,
+                 negative_prompt=excluded.negative_prompt,
+                 params=excluded.params,
+                 phash=COALESCE(excluded.phash, images.phash),
+                 error=excluded.error, scanned_at=excluded.scanned_at""",
+            (
+                str(p), r["filename"], mtime, size, r.get("tool", "unknown"),
+                r.get("prompt", ""), r.get("negative_prompt", ""),
+                json.dumps(r.get("params", {}), ensure_ascii=False),
+                phash, r.get("error"), time.time(),
+            ),
+        )
+
+
+def has_image(path: str) -> bool:
+    row = connect().execute(
+        "SELECT 1 FROM images WHERE path=?", (path,)
+    ).fetchone()
+    return row is not None
+
+
+def get_image(path: str) -> dict | None:
+    row = connect().execute(
+        "SELECT * FROM images WHERE path=?", (path,)
+    ).fetchone()
+    return _row_to_item(row) if row else None
+
+
+def known_mtimes(prefix: str) -> dict[str, float]:
+    """path -> mtime for all images under a directory (for incremental scans)."""
+    rows = connect().execute(
+        "SELECT path, mtime FROM images WHERE path LIKE ?",
+        (prefix.rstrip("/") + "/%",),
+    ).fetchall()
+    return {r["path"]: r["mtime"] or 0 for r in rows}
+
+
+def query_images(
+    q: str = "",
+    tool: str = "",
+    favorite: bool | None = None,
+    min_rating: int = 0,
+    group: str = "",
+    sort: str = "recent",
+    offset: int = 0,
+    limit: int = 60,
+) -> tuple[int, list[dict]]:
+    where, args = [], []
+    if q:
+        like = f"%{q}%"
+        where.append(
+            "(prompt LIKE ? OR negative_prompt LIKE ? OR filename LIKE ?"
+            " OR params LIKE ? OR IFNULL(tags,'') LIKE ?)"
+        )
+        args += [like] * 5
+    if tool:
+        where.append("tool=?")
+        args.append(tool)
+    if favorite is not None:
+        where.append("favorite=?")
+        args.append(1 if favorite else 0)
+    if min_rating:
+        where.append("rating>=?")
+        args.append(min_rating)
+    if group:
+        where.append("group_name=?")
+        args.append(group)
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    order = {
+        "recent": "scanned_at DESC",
+        "oldest": "scanned_at ASC",
+        "rating": "rating DESC, scanned_at DESC",
+        "name": "filename COLLATE NOCASE ASC",
+    }.get(sort, "scanned_at DESC")
+    conn = connect()
+    total = conn.execute(f"SELECT COUNT(*) c FROM images {w}", args).fetchone()["c"]
+    rows = conn.execute(
+        f"SELECT * FROM images {w} ORDER BY {order} LIMIT ? OFFSET ?",
+        args + [limit, offset],
+    ).fetchall()
+    return total, [_row_to_item(r) for r in rows]
+
+
+def set_meta(
+    path: str,
+    rating: int | None = None,
+    favorite: bool | None = None,
+    group_name: str | None = None,
+) -> dict | None:
+    sets, args = [], []
+    if rating is not None:
+        sets.append("rating=?")
+        args.append(max(0, min(5, int(rating))))
+    if favorite is not None:
+        sets.append("favorite=?")
+        args.append(1 if favorite else 0)
+    if group_name is not None:
+        sets.append("group_name=?")
+        args.append(group_name or None)
+    if sets:
+        conn = connect()
+        with conn:
+            conn.execute(
+                f"UPDATE images SET {', '.join(sets)} WHERE path=?", args + [path]
+            )
+    return get_image(path)
+
+
+def set_tags(path: str, tags: list[str]) -> None:
+    conn = connect()
+    with conn:
+        conn.execute(
+            "UPDATE images SET tags=? WHERE path=?",
+            (json.dumps(tags, ensure_ascii=False), path),
+        )
+
+
+def untagged_paths(limit: int | None = None) -> list[str]:
+    sql = "SELECT path FROM images WHERE tags IS NULL AND error IS NULL"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return [r["path"] for r in connect().execute(sql).fetchall()]
+
+
+def similar_images(path: str, max_distance: int = 10, limit: int = 50) -> list[dict]:
+    target = get_image(path)
+    if not target or not target.get("phash"):
+        return []
+    rows = connect().execute(
+        "SELECT * FROM images WHERE phash IS NOT NULL AND path != ?", (path,)
+    ).fetchall()
+    scored = []
+    for r in rows:
+        d = imghash.hamming(target["phash"], r["phash"])
+        if d <= max_distance:
+            item = _row_to_item(r)
+            item["distance"] = d
+            scored.append(item)
+    scored.sort(key=lambda x: x["distance"])
+    return scored[:limit]
+
+
+def duplicate_groups(limit: int = 100) -> list[dict]:
+    """Groups of images sharing an identical perceptual hash."""
+    conn = connect()
+    hashes = conn.execute(
+        """SELECT phash, COUNT(*) c FROM images
+           WHERE phash IS NOT NULL GROUP BY phash
+           HAVING c > 1 ORDER BY c DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    out = []
+    for h in hashes:
+        rows = conn.execute(
+            "SELECT * FROM images WHERE phash=? ORDER BY path", (h["phash"],)
+        ).fetchall()
+        out.append({"phash": h["phash"], "count": h["c"],
+                    "items": [_row_to_item(r) for r in rows]})
+    return out
+
+
+def summary() -> dict:
+    conn = connect()
+    total = conn.execute("SELECT COUNT(*) c FROM images").fetchone()["c"]
+    by_tool = {
+        r["tool"]: r["c"]
+        for r in conn.execute(
+            "SELECT tool, COUNT(*) c FROM images GROUP BY tool"
+        ).fetchall()
+    }
+    favorites = conn.execute(
+        "SELECT COUNT(*) c FROM images WHERE favorite=1"
+    ).fetchone()["c"]
+    tagged = conn.execute(
+        "SELECT COUNT(*) c FROM images WHERE tags IS NOT NULL"
+    ).fetchone()["c"]
+    return {"total": total, "by_tool": by_tool, "favorites": favorites,
+            "tagged": tagged}
+
+
+def group_names() -> list[str]:
+    rows = connect().execute(
+        "SELECT DISTINCT group_name FROM images WHERE group_name IS NOT NULL"
+        " ORDER BY group_name"
+    ).fetchall()
+    return [r["group_name"] for r in rows]
+
+
+# ---------------------------------------------------------------- watches
+
+
+def list_watches() -> list[dict]:
+    return [dict(r) for r in connect().execute(
+        "SELECT * FROM watches ORDER BY id"
+    ).fetchall()]
+
+
+def add_watch(directory: str, recursive: bool = True,
+              poll_interval: float = 30) -> dict:
+    conn = connect()
+    with conn:
+        conn.execute(
+            """INSERT INTO watches(directory, recursive, poll_interval)
+               VALUES (?,?,?)
+               ON CONFLICT(directory) DO UPDATE SET
+                 recursive=excluded.recursive,
+                 poll_interval=excluded.poll_interval, enabled=1""",
+            (directory, 1 if recursive else 0, max(5, float(poll_interval))),
+        )
+    row = conn.execute(
+        "SELECT * FROM watches WHERE directory=?", (directory,)
+    ).fetchone()
+    return dict(row)
+
+
+def update_watch(watch_id: int, enabled: bool | None = None,
+                 poll_interval: float | None = None) -> None:
+    sets, args = [], []
+    if enabled is not None:
+        sets.append("enabled=?")
+        args.append(1 if enabled else 0)
+    if poll_interval is not None:
+        sets.append("poll_interval=?")
+        args.append(max(5, float(poll_interval)))
+    if sets:
+        conn = connect()
+        with conn:
+            conn.execute(
+                f"UPDATE watches SET {', '.join(sets)} WHERE id=?",
+                args + [watch_id],
+            )
+
+
+def touch_watch(watch_id: int) -> None:
+    conn = connect()
+    with conn:
+        conn.execute(
+            "UPDATE watches SET last_scan=? WHERE id=?", (time.time(), watch_id)
+        )
+
+
+def delete_watch(watch_id: int) -> None:
+    conn = connect()
+    with conn:
+        conn.execute("DELETE FROM watches WHERE id=?", (watch_id,))
+
+
+# ---------------------------------------------------------------- groups
+
+
+def list_groups() -> list[dict]:
+    return [dict(r) for r in connect().execute(
+        "SELECT * FROM groups ORDER BY id"
+    ).fetchall()]
+
+
+def add_group(name: str, pattern: str, is_regex: bool = False,
+              target: str = "prompt") -> dict:
+    if is_regex:
+        re.compile(pattern)  # raises re.error -> 400 upstream
+    if target not in ("prompt", "filename", "model"):
+        raise ValueError("target must be prompt, filename or model")
+    conn = connect()
+    with conn:
+        conn.execute(
+            """INSERT INTO groups(name, pattern, is_regex, target)
+               VALUES (?,?,?,?)
+               ON CONFLICT(name) DO UPDATE SET pattern=excluded.pattern,
+                 is_regex=excluded.is_regex, target=excluded.target""",
+            (name, pattern, 1 if is_regex else 0, target),
+        )
+    row = conn.execute("SELECT * FROM groups WHERE name=?", (name,)).fetchone()
+    return dict(row)
+
+
+def delete_group(group_id: int) -> None:
+    conn = connect()
+    with conn:
+        conn.execute("DELETE FROM groups WHERE id=?", (group_id,))
+
+
+def apply_groups(overwrite: bool = False) -> int:
+    """Assign group_name by matching each rule against prompt/filename/model.
+    First matching rule (by id order) wins. Returns updated row count."""
+    rules = list_groups()
+    if not rules:
+        return 0
+    compiled = []
+    for g in rules:
+        if g["is_regex"]:
+            try:
+                rx = re.compile(g["pattern"], re.IGNORECASE)
+            except re.error:
+                continue
+            compiled.append((g["name"], g["target"], rx, None))
+        else:
+            compiled.append((g["name"], g["target"], None, g["pattern"].lower()))
+
+    conn = connect()
+    where = "" if overwrite else "WHERE group_name IS NULL"
+    rows = conn.execute(
+        f"SELECT path, prompt, filename, params, group_name FROM images {where}"
+    ).fetchall()
+    updates = []
+    for r in rows:
+        try:
+            model = json.loads(r["params"] or "{}").get("Model", "")
+        except json.JSONDecodeError:
+            model = ""
+        haystacks = {"prompt": r["prompt"] or "", "filename": r["filename"] or "",
+                     "model": str(model)}
+        for name, target, rx, sub in compiled:
+            hay = haystacks.get(target, "")
+            if (rx.search(hay) if rx else sub in hay.lower()):
+                if r["group_name"] != name:
+                    updates.append((name, r["path"]))
+                break
+    with conn:
+        conn.executemany("UPDATE images SET group_name=? WHERE path=?", updates)
+    return len(updates)

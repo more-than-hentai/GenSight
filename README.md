@@ -9,13 +9,18 @@ AI 생성 이미지 메타데이터 추출 WebUI — AI-generated image metadata
 ## Features
 
 - **메타데이터 추출**: A1111/Forge/SD.Next(`parameters`), ComfyUI(워크플로 그래프 파싱), NovelAI, JPEG/WebP EXIF
-- **디렉토리 관리**: 웹 UI 설정 메뉴에서 스캔 대상 디렉토리 추가/삭제
+- **영구 라이브러리 (SQLite)**: 스캔 결과가 `data/gensight.db`에 저장되어 재시작 후에도 유지, 증분 재스캔
+- **폴더 자동 감시**: watchdog 실시간 감지 + 주기적 폴링 폴백, 감시 폴더별 주기 설정
+- **유사/중복 검색**: perceptual hash(dHash) 기반 — 중복 그룹 보기, 상세에서 유사 이미지 스트립
+- **프롬프트 통계**: Positive/Negative 토큰 빈도, 모델/샘플러 사용 통계 대시보드
+- **평점·즐겨찾기·그룹**: ★1–5 평점, ♥ 즐겨찾기, 문자열/정규식 규칙 기반 그룹 자동 분류
+- **WD Tagger 자동 태깅** (선택 설치): onnxruntime 기반, 설정된 멀티 GPU에 작업 분배
+- **MCP 서버**: Claude Code 등 AI 클라이언트에서 라이브러리 검색/통계 조회 ([docs/mcp.md](docs/mcp.md))
 - **대량 이미지 대응**: 작업(스캔)별 워커 수 조정, 동시 작업 수 제한, 백그라운드 작업 큐 + 진행률/취소
-- **결과 뷰어**: 썸네일 그리드, 프롬프트/파일명/모델 검색, 도구별 필터, 상세 모달
-- **게시판용 복사**: JSON / Markdown / BBCode / 프롬프트만 — 클릭 한 번으로 클립보드 복사
+- **단일 이미지 분석**: 드래그 & 드롭 / 클릭 업로드로 즉시 분석
+- **게시판용 복사**: JSON / Markdown / BBCode / 프롬프트만 — 썸네일 이미지 포함 복사 지원
 - **내보내기**: 스캔 결과 전체를 JSON / CSV로 다운로드
 - **다국어**: 한국어 / English / 日本語 (웹 UI에서 즉시 전환)
-- **멀티 GPU 준비**: GPU 감지 및 활성화 설정 — 추후 ML 이미지 분석(카테고리/의상/배경/품질 판별)에 사용
 
 ## Quick start (venv)
 
@@ -100,11 +105,16 @@ data/           Runtime data: settings, thumbnail cache (gitignored)
 
 ## Roadmap
 
-- [ ] ML 이미지 분석: 카테고리 / 의상 / 배경 태깅 (멀티 GPU 분산)
+- [x] 결과 영구 저장 (SQLite) 및 증분 스캔
+- [x] 폴더 자동 감시 (watchdog + 폴링 폴백)
+- [x] 중복 이미지 탐지 (perceptual hash)
+- [x] 프롬프트 통계 대시보드 (자주 쓴 토큰 / 모델 / 샘플러)
+- [x] 평점 / 즐겨찾기 / 그룹 자동 분류
+- [x] WD Tagger 태깅 (멀티 GPU 분산, 선택 설치)
+- [x] MCP 서버 (Claude Code 연동)
 - [ ] 품질 판별: 저품질·신체 파손(anatomy broken) 이미지 검출
-- [ ] 프롬프트 통계 대시보드 (자주 쓴 토큰 / 모델 / 샘플러)
-- [ ] 중복 이미지 탐지 (perceptual hash)
-- [ ] 결과 영구 저장 (SQLite) 및 증분 스캔
+- [ ] 휴지통 / 파일 정리 (메타데이터 기반 이동·이름 변경)
+- [ ] 사용자 인증 (원격 접근용)
 
 ## Tests
 

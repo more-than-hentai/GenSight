@@ -1,0 +1,6 @@
+# Optional ML dependencies for WD Tagger auto-tagging.
+#   pip install -r requirements-ml.txt
+# Use plain `onnxruntime` instead of `onnxruntime-gpu` for CPU-only setups.
+numpy>=1.26
+onnxruntime-gpu>=1.18
+huggingface_hub>=0.23

@@ -171,6 +171,50 @@ button.ghost { background: none; border: none; font-size: 16px; }
 }
 @media (max-width: 720px) { .modal-body { grid-template-columns: 1fr; } }
 
+/* library */
+.toggle-btn.on { border-color: var(--err); color: var(--err); }
+.item .overlay {
+  display: flex; gap: 6px; align-items: center; margin-top: 6px; font-size: 12px;
+}
+.stars { cursor: pointer; user-select: none; letter-spacing: 1px; }
+.stars .s { color: #3a4158; }
+.stars .s.on { color: var(--warn); }
+.fav-btn { background: none; border: none; font-size: 15px; padding: 2px 4px; color: var(--muted); }
+.fav-btn.on { color: var(--err); }
+.meta-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.tag-chips span {
+  font-size: 11px; padding: 2px 8px; border-radius: 20px;
+  background: var(--panel2); color: var(--muted);
+}
+.similar-strip { display: flex; gap: 8px; overflow-x: auto; padding: 6px 0; }
+.similar-strip img {
+  width: 84px; height: 84px; object-fit: cover; border-radius: 8px;
+  cursor: pointer; border: 1px solid #2c3140; flex-shrink: 0;
+}
+.similar-strip img:hover { border-color: var(--accent); }
+#similarBox h4 { margin: 14px 0 4px; font-size: 13px; color: var(--accent); }
+.dupe-head {
+  grid-column: 1 / -1; color: var(--muted); font-size: 12.5px;
+  border-bottom: 1px solid #2c3140; padding-bottom: 4px; margin-top: 8px;
+}
+
+/* stats */
+.stats-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.stats-cols h3 { font-size: 13px; color: var(--muted); margin: 4px 0 8px; }
+.bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12.5px; }
+.bar-row .label {
+  width: 42%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bar-row .bar {
+  flex: 1; height: 10px; background: #2c3140; border-radius: 5px; overflow: hidden;
+}
+.bar-row .bar > div {
+  height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2));
+}
+.bar-row .count { width: 44px; text-align: right; color: var(--muted); }
+@media (max-width: 720px) { .stats-cols { grid-template-columns: 1fr; } }
+
 /* toast */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
