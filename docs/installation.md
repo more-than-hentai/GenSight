@@ -14,11 +14,20 @@
 ```bash
 git clone <repository-url> GenSight
 cd GenSight
-./run.sh
+./run.sh start
 ```
 
-`run.sh`는 첫 실행 시 `.venv` 생성과 의존성 설치를 자동으로 수행한 뒤
-서버를 시작합니다. 브라우저에서 <http://127.0.0.1:8090> 을 엽니다.
+`run.sh`는 첫 실행 시 `.venv` 생성과 의존성 설치를 자동으로 수행합니다.
+브라우저에서 <http://127.0.0.1:8090> 을 엽니다.
+
+| 명령 | 동작 |
+|---|---|
+| `./run.sh` | 포그라운드 실행 (개발용, Ctrl+C 종료) |
+| `./run.sh start` | 백그라운드 시작 — PID `data/gensight.pid`, 로그 `data/gensight.log` |
+| `./run.sh stop` | 정상 종료 (10초 후 강제 종료 폴백) |
+| `./run.sh restart` | 재시작 |
+| `./run.sh reload` | graceful 재시작 (uvicorn은 핫 리로드 시그널 미지원) |
+| `./run.sh status` | 상태 + 헬스체크 (종료 코드: 실행 중 0, 정지 3) |
 
 수동 설치:
 
