@@ -54,7 +54,7 @@ docker compose up --build
 ### 라이브러리 — 검색·필터·평점·품질 배지
 ![Library](docs/images/library.png)
 
-### 상세 보기 — 신택스 하이라이트, 게시판용 복사(JSON/Markdown/BBCode/표)
+### 상세 보기 — syntax 하이라이트, 게시판용 복사(JSON/Markdown/BBCode/표)
 ![Detail](docs/images/detail.png)
 
 ### 스캔 · 통계 · 설정
