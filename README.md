@@ -25,11 +25,19 @@ AI 생성 이미지 메타데이터 추출 WebUI — AI-generated image metadata
 ## Quick start (venv)
 
 ```bash
-./run.sh
+./run.sh start     # 백그라운드 시작 (./run.sh 만 치면 포그라운드 실행)
 ```
 
 첫 실행 시 `.venv` 생성과 의존성 설치가 자동으로 이루어집니다.
 브라우저에서 <http://127.0.0.1:8090> 을 엽니다.
+
+```bash
+./run.sh status    # 상태 + 헬스체크
+./run.sh restart   # 재시작 (reload 동일 — uvicorn은 핫 리로드 시그널 미지원)
+./run.sh stop      # 종료
+```
+
+PID/로그는 `data/gensight.pid`, `data/gensight.log`에 기록됩니다.
 
 수동 설치:
 
