@@ -98,12 +98,13 @@
           <option value="low" data-i18n="lib.lowQuality">저품질 (&lt;50)</option>
           <option value="unrated" data-i18n="lib.unrated">미분석</option>
         </select>
-        <select id="libSort">
-          <option value="recent" data-i18n="lib.sortRecent">최신순</option>
-          <option value="oldest" data-i18n="lib.sortOldest">오래된순</option>
-          <option value="rating" data-i18n="lib.sortRating">평점순</option>
-          <option value="name" data-i18n="lib.sortName">이름순</option>
-          <option value="quality" data-i18n="lib.sortQuality">품질 낮은순</option>
+        <select id="libCRating" title="콘텐츠 등급">
+          <option value="" data-i18n="lib.allCRatings">전체 등급</option>
+          <option value="PG">PG</option>
+          <option value="PG-13">PG-13</option>
+          <option value="R">R 🔞</option>
+          <option value="X">X 🔞</option>
+          <option value="unrated" data-i18n="lib.crUnrated">등급 미분류</option>
         </select>
         <select id="libPageSize" title="페이지당 항목 수">
           <option value="10">10</option>
@@ -118,6 +119,12 @@
         <span class="spacer"></span>
         <span id="libDirChip" class="tool-badge dir-chip hidden" title="디렉토리 필터 (클릭하여 해제)"></span>
         <span id="libCount" class="hint"></span>
+      </div>
+      <div class="row wrap">
+        <label class="hint" data-i18n="lib.sortLabel">정렬</label>
+        <select id="libSort1"></select>
+        <select id="libSort2"></select>
+        <select id="libSort3"></select>
       </div>
     </div>
     <div id="libGrid" class="grid"></div>
@@ -236,6 +243,10 @@
         <button id="qualityCancel" data-i18n="scan.cancel">취소</button>
         <span id="qualityStatus" class="hint"></span>
       </div>
+      <div class="row">
+        <label><input type="checkbox" id="qualityAuto">
+          <span data-i18n="settings.qualityAuto">스캔/감시로 추가되는 이미지 자동 분석</span></label>
+      </div>
       <p class="hint" data-i18n="settings.qualityHint">
         블러/노출/대비/저해상도 휴리스틱과 생성 설정(낮은 Steps, 극단적 CFG) 기반으로
         0–100 점수와 이슈를 부여합니다. 신체 파손 검출(ML)은 로드맵에 있습니다.
@@ -346,6 +357,8 @@
         </div>
         <pre id="modalMeta"></pre>
         <div id="modalTags" class="tag-chips hidden"></div>
+        <button id="copyTagsBtn" class="hidden copy-tags"
+                data-i18n="detail.copyTags">태그를 프롬프트로 복사</button>
         <div id="similarBox" class="hidden">
           <h4 data-i18n="lib.similar">유사 이미지</h4>
           <div id="similarStrip" class="similar-strip"></div>

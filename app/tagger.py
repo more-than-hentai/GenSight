@@ -29,6 +29,35 @@ GENERAL_THRESHOLD = 0.35
 CHARACTER_THRESHOLD = 0.85
 INSTALL_HINT = "pip install -r requirements-ml.txt"
 
+# WD tagger rating head (category 9) -> civitai-style content rating.
+# "explicit" is mapped to X; the tagger cannot separate X from XXX.
+RATING_MAP = {
+    "general": "PG",
+    "sensitive": "PG-13",
+    "questionable": "R",
+    "explicit": "X",
+}
+
+
+def extract_predictions(
+    probs, names: list[str], categories: list[int]
+) -> tuple[list[str], str | None]:
+    """Turn raw model probabilities into (tags, content_rating).
+
+    Pure function so the mapping is unit-testable without ML deps.
+    Categories: 0 = general tags, 4 = character tags, 9 = rating head.
+    """
+    tags: list[str] = []
+    best_rating, best_prob = None, -1.0
+    for name, cat, p in zip(names, categories, probs):
+        if cat == 0 and p >= GENERAL_THRESHOLD:
+            tags.append(name)
+        elif cat == 4 and p >= CHARACTER_THRESHOLD:
+            tags.append(f"character:{name}")
+        elif cat == 9 and p > best_prob:
+            best_rating, best_prob = RATING_MAP.get(name), float(p)
+    return tags, best_rating
+
 
 class TaggerUnavailable(RuntimeError):
     pass
@@ -179,13 +208,8 @@ class TaggerManager:
                     try:
                         batch = _preprocess(np, path, size)
                         probs = session.run(None, {input_meta.name: batch})[0][0]
-                        tags = []
-                        for name, cat, p in zip(names, categories, probs):
-                            if cat == 0 and p >= GENERAL_THRESHOLD:
-                                tags.append(name)
-                            elif cat == 4 and p >= CHARACTER_THRESHOLD:
-                                tags.append(f"character:{name}")
-                        db.set_tags(path, tags)
+                        tags, rating = extract_predictions(probs, names, categories)
+                        db.set_tags(path, tags, rating)
                     except Exception as e:  # noqa: BLE001
                         logger.warning("tagging failed for %s: %s", path, e)
                         with job.lock:

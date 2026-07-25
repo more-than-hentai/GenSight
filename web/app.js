@@ -57,6 +57,7 @@ async function loadLang(lang) {
   document.documentElement.lang = lang;
   $$("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n, el.textContent); });
   $$("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh, el.placeholder); });
+  initSortSelects(); // rebuild JS-generated option labels in the new language
 }
 
 /* ---------------------------------------------------------- tabs */
@@ -285,14 +286,31 @@ async function renderQuality() {
   try { s = await api.get("/api/quality/status"); } catch { return; }
   let text;
   if (s.job && s.job.status === "running") {
-    text = `${t("status.extracting", "추출중")} ${s.job.processed}/${s.job.total}`;
+    text = `${t("status.extracting", "추출중")} ${s.job.processed}/${s.job.total}` +
+      ` · ${t("settings.qualityPending", "미분석")}: ${s.pending}`;
     qualityTimer = setTimeout(renderQuality, 1500);
   } else {
-    text = `${t("settings.qualityPending", "미분석")}: ${s.pending}` +
-      (s.job ? ` · ${t("status." + s.job.status, s.job.status)}` : "");
+    text = `${t("settings.qualityPending", "미분석")}: ${s.pending}`;
+    if (s.job) {
+      text += ` · ${t("settings.qualityLast", "지난 작업")}: ` +
+        `${t("status." + s.job.status, s.job.status)} ` +
+        `${s.job.processed}/${s.job.total}` +
+        (s.job.errors ? ` (${t("status.error", "오류")} ${s.job.errors})` : "");
+    }
   }
   $("#qualityStatus").textContent = text;
+  if (state.settings) {
+    $("#qualityAuto").checked = !!state.settings.quality?.auto;
+  }
 }
+
+$("#qualityAuto").onchange = async (e) => {
+  try {
+    await api.send("PUT", "/api/settings", { quality: { auto: e.target.checked } });
+    await loadSettings();
+    toast(t("toast.saved", "설정이 저장되었습니다"));
+  } catch (err2) { toast(err2.message, true); }
+};
 
 $("#qualityRun").onclick = async () => {
   try {
@@ -593,6 +611,54 @@ function updateDirChip() {
 }
 $("#libDirChip").onclick = () => { lib.dir = ""; loadLibrary(true); };
 
+/* Multi-level sort: three chained selects -> "key1,key2,key3" */
+const SORT_OPTIONS = [
+  ["recent", "sort.recent", "등록 최신순"],
+  ["oldest", "sort.oldest", "등록 오래된순"],
+  ["mtime_desc", "sort.mtimeDesc", "파일 날짜 최신순"],
+  ["mtime_asc", "sort.mtimeAsc", "파일 날짜 오래된순"],
+  ["rating", "sort.rating", "평점 높은순"],
+  ["rating_asc", "sort.ratingAsc", "평점 낮은순"],
+  ["quality", "sort.quality", "품질 낮은순"],
+  ["quality_desc", "sort.qualityDesc", "품질 높은순"],
+  ["name", "sort.nameAsc", "이름 ↑"],
+  ["name_desc", "sort.nameDesc", "이름 ↓"],
+  ["size_desc", "sort.sizeDesc", "용량 큰순"],
+  ["size_asc", "sort.sizeAsc", "용량 작은순"],
+];
+
+function initSortSelects() {
+  ["#libSort1", "#libSort2", "#libSort3"].forEach((id, i) => {
+    const sel = $(id);
+    sel.innerHTML = "";
+    if (i > 0) {
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "—";
+      sel.appendChild(none);
+    }
+    for (const [value, key, fallback] of SORT_OPTIONS) {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = t(key, fallback);
+      sel.appendChild(o);
+    }
+    sel.value = localStorage.getItem(`gensight.sort${i + 1}`) ??
+      (i === 0 ? "recent" : "");
+    sel.onchange = () => {
+      localStorage.setItem(`gensight.sort${i + 1}`, sel.value);
+      loadLibrary(true);
+    };
+  });
+}
+
+function sortChain() {
+  return ["#libSort1", "#libSort2", "#libSort3"]
+    .map((id) => $(id).value)
+    .filter(Boolean)
+    .join(",") || "recent";
+}
+
 function libFilters() {
   const f = {
     q: $("#libSearch").value,
@@ -600,6 +666,7 @@ function libFilters() {
     min_rating: +$("#libRating").value,
     group: $("#libGroup").value,
     quality: $("#libQuality").value,
+    content_rating: $("#libCRating").value,
     directory: lib.dir,
   };
   if ($("#libFav").classList.contains("on")) f.favorite = true;
@@ -610,7 +677,8 @@ function libParams() {
   const f = libFilters();
   const p = new URLSearchParams({
     q: f.q, tool: f.tool, min_rating: f.min_rating, group: f.group,
-    quality: f.quality, directory: f.directory, sort: $("#libSort").value,
+    quality: f.quality, content_rating: f.content_rating,
+    directory: f.directory, sort: sortChain(),
     offset: (lib.page - 1) * lib.size, limit: lib.size,
   });
   if (f.favorite) p.set("favorite", "true");
@@ -814,6 +882,7 @@ function renderLibItem(r) {
       <span class="tool-badge ${r.tool}">${r.tool}</span>
       ${r.group_name ? `<span class="tool-badge">${escapeHtml(r.group_name)}</span>` : ""}
       ${qualityBadge(r)}
+      ${r.content_rating ? `<span class="tool-badge cr-${escapeHtml(r.content_rating).replace(/[^A-Za-z0-9]/g, "")}">${escapeHtml(r.content_rating)}</span>` : ""}
       ${typeof r.distance === "number" ? `<span class="tool-badge">d=${r.distance}</span>` : ""}
     </div>`;
   const overlay = document.createElement("div");
@@ -846,8 +915,19 @@ function renderLibItem(r) {
   overlay.appendChild(trashBtn);
   body.appendChild(overlay);
   el.append(img, body);
+  if (isNsfw(r)) {
+    const cover = document.createElement("div");
+    cover.className = "nsfw-cover";
+    cover.textContent = `🔞 ${r.content_rating} — ${t("lib.nsfwShow", "클릭하여 표시")}`;
+    cover.onclick = (e) => { e.stopPropagation(); cover.remove(); };
+    el.appendChild(cover);
+  }
   el.onclick = () => openLibraryDetail(r.file);
   return el;
+}
+
+function isNsfw(r) {
+  return r.content_rating === "R" || r.content_rating === "X";
 }
 
 async function patchMeta(path, fields) {
@@ -864,7 +944,8 @@ async function openLibraryDetail(path) {
 }
 
 $("#libTool").onchange = $("#libRating").onchange = $("#libQuality").onchange =
-$("#libGroup").onchange = $("#libSort").onchange = () => loadLibrary(true);
+$("#libGroup").onchange = $("#libCRating").onchange = () => loadLibrary(true);
+initSortSelects();
 $("#libPageSize").value = String(lib.size);
 $("#libPageSize").onchange = (e) => {
   lib.size = +e.target.value;
@@ -947,6 +1028,8 @@ function openDetailData(r, opts = {}) {
   const img = $("#modalImg");
   img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
   img.src = `/api/image?path=${encodeURIComponent(r.file)}`;
+  img.classList.toggle("nsfw-blur", isNsfw(r));
+  img.onclick = isNsfw(r) ? () => img.classList.remove("nsfw-blur") : null;
   renderModalMeta("readable");
 
   // Library-only controls: rating / favorite / group / tags / similar
@@ -977,9 +1060,17 @@ function openDetailData(r, opts = {}) {
   if (r.quality_score !== null && r.quality_score !== undefined) {
     issues.unshift(`Q ${Math.round(r.quality_score)}/100`);
   }
+  if (r.content_rating) issues.unshift(`🔞 ${r.content_rating}`);
   const chips = [...issues, ...tags];
   tagsBox.classList.toggle("hidden", !chips.length);
   tagsBox.innerHTML = chips.map((x) => `<span>${escapeHtml(x)}</span>`).join("");
+
+  // Danbooru-style prompt from tags (WD Tagger output is already
+  // danbooru vocabulary — usable directly as a generation prompt)
+  const copyTags = $("#copyTagsBtn");
+  copyTags.classList.toggle("hidden", !tags.length);
+  copyTags.onclick = () =>
+    copyText(tags.map((x) => x.replace(/^character:/, "")).join(", "));
 
   const simBox = $("#similarBox");
   simBox.classList.add("hidden");
