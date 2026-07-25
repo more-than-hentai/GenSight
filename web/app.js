@@ -65,7 +65,6 @@ $$(".tab").forEach((btn) =>
   btn.addEventListener("click", () => {
     $$(".tab").forEach((b) => b.classList.toggle("active", b === btn));
     $$(".panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${btn.dataset.tab}`));
-    if (btn.dataset.tab === "results") refreshResultJobs();
     if (btn.dataset.tab === "settings") renderSettings();
     if (btn.dataset.tab === "library") loadLibrary(true);
     if (btn.dataset.tab === "stats") loadStats();
@@ -534,7 +533,7 @@ function renderJobs(jobs) {
       <span>${j.processed}/${j.total}${j.with_metadata ? ` · 🏷 ${j.with_metadata}` : ""}</span>`;
     const view = document.createElement("button");
     view.textContent = t("scan.view", "결과 보기");
-    view.onclick = () => openResults(j.id);
+    view.onclick = () => openLibraryForDir(j.directory);
     el.appendChild(view);
     if (["queued", "scanning", "extracting"].includes(j.status)) {
       const cancel = document.createElement("button");
@@ -557,57 +556,7 @@ function renderJobs(jobs) {
   }
 }
 
-/* ---------------------------------------------------------- results */
-
-async function refreshResultJobs() {
-  let jobs;
-  try {
-    ({ jobs } = await api.get("/api/jobs"));
-  } catch (e) { toast(e.message, true); return; }
-  const sel = $("#resultJob");
-  const prev = sel.value;
-  sel.innerHTML = "";
-  for (const j of jobs) {
-    const o = document.createElement("option");
-    o.value = j.id;
-    o.textContent = `${j.directory} (${j.processed})`;
-    sel.appendChild(o);
-  }
-  if (jobs.length) {
-    sel.value = jobs.some((j) => j.id === prev) ? prev : jobs[0].id;
-    if (sel.value !== state.currentJob) loadResults(true);
-  }
-}
-
-function openResults(jobId) {
-  $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "results"));
-  $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "tab-results"));
-  refreshResultJobs().then(() => {
-    $("#resultJob").value = jobId;
-    loadResults(true);
-  });
-}
-
-async function loadResults(reset) {
-  const jobId = $("#resultJob").value;
-  if (!jobId) return;
-  if (reset) { state.offset = 0; $("#resultGrid").innerHTML = ""; }
-  state.currentJob = jobId;
-  const q = $("#resultSearch").value;
-  const tool = $("#resultTool").value;
-  let data;
-  try {
-    data = await api.get(
-      `/api/jobs/${jobId}/results?offset=${state.offset}&limit=${state.pageSize}` +
-      `&q=${encodeURIComponent(q)}&tool=${encodeURIComponent(tool)}`
-    );
-  } catch (e) { toast(e.message, true); return; }
-  $("#resultCount").textContent = t("results.count", "결과") + `: ${data.total}`;
-  const grid = $("#resultGrid");
-  for (const r of data.items) grid.appendChild(renderItem(jobId, r));
-  state.offset += data.items.length;
-  $("#loadMore").classList.toggle("hidden", state.offset >= data.total);
-}
+/* ---------------------------------------------------------- shared */
 
 const BROKEN_IMG =
   "data:image/svg+xml;utf8," +
@@ -617,50 +566,26 @@ const BROKEN_IMG =
     '<text x="50" y="55" font-size="30" text-anchor="middle" fill="#3a4158">🖼</text></svg>'
   );
 
-function renderItem(jobId, r) {
-  const el = document.createElement("div");
-  el.className = "item";
-  const img = document.createElement("img");
-  img.loading = "lazy";
-  img.onerror = () => { img.onerror = null; img.src = BROKEN_IMG; };
-  img.src = `/api/image?path=${encodeURIComponent(r.file)}&thumb=true`;
-  const body = document.createElement("div");
-  body.className = "body";
-  body.innerHTML = `
-    <div class="name">${escapeHtml(r.filename)}</div>
-    <div class="prompt">${escapeHtml((r.prompt || "—").replace(/\s+/g, " "))}</div>
-    <div class="tools">
-      <span class="tool-badge ${r.tool}">${r.tool}</span>
-      ${r.params["Size"] ? `<span class="tool-badge">${escapeHtml(r.params["Size"])}</span>` : ""}
-    </div>`;
-  const quick = document.createElement("button");
-  quick.className = "quick-copy";
-  quick.textContent = "📋 JSON";
-  quick.onclick = (e) => { e.stopPropagation(); copyText(formatResult(r, "json")); };
-  body.querySelector(".tools").appendChild(quick);
-  el.append(img, body);
-  el.onclick = () => openDetail(jobId, r.file);
-  return el;
-}
-
-$("#resultJob").onchange = () => loadResults(true);
-$("#resultTool").onchange = () => loadResults(true);
-$("#loadMore").onclick = () => loadResults(false);
-let searchTimer;
-$("#resultSearch").oninput = () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => loadResults(true), 300);
-};
-$("#exportJson").onclick = () => exportJob("json");
-$("#exportCsv").onclick = () => exportJob("csv");
-function exportJob(format) {
-  const jobId = $("#resultJob").value;
-  if (jobId) window.open(`/api/jobs/${jobId}/export?format=${format}`, "_blank");
-}
-
 /* ---------------------------------------------------------- library */
 
-const lib = { offset: 0, dupes: false, trash: false };
+const lib = { offset: 0, dupes: false, trash: false, dir: "" };
+
+function openLibraryForDir(directory) {
+  lib.dir = directory;
+  lib.dupes = lib.trash = false;
+  $("#libDupes").classList.remove("on");
+  $("#libTrash").classList.remove("on");
+  $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "library"));
+  $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "tab-library"));
+  loadLibrary(true);
+}
+
+function updateDirChip() {
+  const chip = $("#libDirChip");
+  chip.classList.toggle("hidden", !lib.dir);
+  chip.textContent = lib.dir ? `📁 ${lib.dir} ✕` : "";
+}
+$("#libDirChip").onclick = () => { lib.dir = ""; loadLibrary(true); };
 
 function libFilters() {
   const f = {
@@ -669,6 +594,7 @@ function libFilters() {
     min_rating: +$("#libRating").value,
     group: $("#libGroup").value,
     quality: $("#libQuality").value,
+    directory: lib.dir,
   };
   if ($("#libFav").classList.contains("on")) f.favorite = true;
   return f;
@@ -678,7 +604,7 @@ function libParams() {
   const f = libFilters();
   const p = new URLSearchParams({
     q: f.q, tool: f.tool, min_rating: f.min_rating, group: f.group,
-    quality: f.quality, sort: $("#libSort").value,
+    quality: f.quality, directory: f.directory, sort: $("#libSort").value,
     offset: lib.offset, limit: state.pageSize,
   });
   if (f.favorite) p.set("favorite", "true");
@@ -686,6 +612,7 @@ function libParams() {
 }
 
 async function loadLibrary(reset) {
+  updateDirChip();
   if (lib.trash) { loadTrash(); return; }
   if (lib.dupes) { loadDuplicates(); return; }
   if (reset) { lib.offset = 0; $("#libGrid").innerHTML = ""; }
@@ -906,6 +833,17 @@ $("#libSearch").oninput = () => {
   clearTimeout(libSearchTimer);
   libSearchTimer = setTimeout(() => loadLibrary(true), 300);
 };
+$("#libExportJson").onclick = () => exportLibrary("json");
+$("#libExportCsv").onclick = () => exportLibrary("csv");
+function exportLibrary(format) {
+  const f = libFilters();
+  const p = new URLSearchParams({
+    format, q: f.q, tool: f.tool, min_rating: f.min_rating,
+    group: f.group, quality: f.quality, directory: f.directory,
+  });
+  if (f.favorite) p.set("favorite", "true");
+  window.open(`/api/library/export?${p}`, "_blank");
+}
 
 /* ---------------------------------------------------------- stats */
 
@@ -941,13 +879,6 @@ async function loadStats() {
 }
 
 /* ---------------------------------------------------------- detail modal */
-
-async function openDetail(jobId, file) {
-  try {
-    const r = await api.get(`/api/jobs/${jobId}/result?file=${encodeURIComponent(file)}`);
-    openDetailData(r);
-  } catch (e) { toast(e.message, true); }
-}
 
 function openDetailData(r, opts = {}) {
   state.detail = r;

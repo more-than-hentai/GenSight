@@ -6,6 +6,7 @@ an explicit purge removes bytes from disk.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import shutil
@@ -45,6 +46,32 @@ def _unique_dest(dest: Path) -> Path:
         if not candidate.exists():
             return candidate
     raise FileExistsError(f"cannot find unique name for {dest}")
+
+
+def cleanup_thumbs() -> int:
+    """Delete thumbnail cache entries whose source file no longer
+    exists at the cached (path, mtime) — orphans left by moves,
+    re-scans and deletions."""
+    tdir = Path(config.THUMB_DIR)
+    if not tdir.is_dir():
+        return 0
+    valid: set[str] = set()
+    for row in db.connect().execute("SELECT path FROM images").fetchall():
+        p = Path(row["path"])
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        valid.add(hashlib.sha1(f"{p}:{st.st_mtime_ns}".encode()).hexdigest())
+    removed = 0
+    for f in tdir.glob("*.webp"):
+        if f.stem not in valid:
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 # ---------------------------------------------------------------- trash

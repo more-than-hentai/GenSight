@@ -12,7 +12,6 @@
   <nav>
     <button class="tab active" data-tab="scan" data-i18n="tab.scan">스캔</button>
     <button class="tab" data-tab="library" data-i18n="tab.library">라이브러리</button>
-    <button class="tab" data-tab="results" data-i18n="tab.results">결과</button>
     <button class="tab" data-tab="stats" data-i18n="tab.stats">통계</button>
     <button class="tab" data-tab="settings" data-i18n="tab.settings">설정</button>
   </nav>
@@ -108,39 +107,16 @@
         </select>
         <button id="libDupes" data-i18n="lib.dupes">중복 보기</button>
         <button id="libTrash" data-i18n="lib.trash">휴지통</button>
+        <button id="libExportJson">JSON ⬇</button>
+        <button id="libExportCsv">CSV ⬇</button>
         <span class="spacer"></span>
+        <span id="libDirChip" class="tool-badge dir-chip hidden" title="디렉토리 필터 (클릭하여 해제)"></span>
         <span id="libCount" class="hint"></span>
       </div>
     </div>
     <div id="libGrid" class="grid"></div>
     <div class="row center">
       <button id="libMore" class="hidden" data-i18n="results.more">더 보기</button>
-    </div>
-  </section>
-
-  <!-- ============================ Results tab -->
-  <section id="tab-results" class="panel">
-    <div class="card">
-      <div class="row wrap">
-        <select id="resultJob"></select>
-        <input type="search" id="resultSearch" data-i18n-ph="results.search"
-               placeholder="프롬프트/파일명/모델 검색">
-        <select id="resultTool">
-          <option value="" data-i18n="results.allTools">전체 도구</option>
-          <option value="a1111">A1111/Forge</option>
-          <option value="comfyui">ComfyUI</option>
-          <option value="novelai">NovelAI</option>
-          <option value="unknown" data-i18n="results.unknown">메타데이터 없음</option>
-        </select>
-        <span class="spacer"></span>
-        <button id="exportJson">JSON ⬇</button>
-        <button id="exportCsv">CSV ⬇</button>
-      </div>
-      <div id="resultCount" class="hint"></div>
-    </div>
-    <div id="resultGrid" class="grid"></div>
-    <div class="row center">
-      <button id="loadMore" class="hidden" data-i18n="results.more">더 보기</button>
     </div>
   </section>
 

@@ -60,7 +60,6 @@ class ScanJob:
         self.error: str | None = None
         self.started_at: float | None = None
         self.finished_at: float | None = None
-        self.results: list[dict[str, Any]] = []
         self._cancel = threading.Event()
         self._lock = threading.Lock()
 
@@ -126,7 +125,6 @@ class ScanJob:
                 return
             item = process_and_store(path)
             with self._lock:
-                self.results.append(item)
                 self.processed += 1
                 if item["prompt"] or len(item["params"]) > 1:
                     self.with_metadata += 1
@@ -151,34 +149,8 @@ class ScanJob:
             "finished_at": self.finished_at,
         }
 
-    def page(self, offset: int, limit: int, query: str = "", tool: str = "") -> dict:
-        with self._lock:
-            items = list(self.results)
-        if query:
-            q = query.lower()
-            items = [
-                r
-                for r in items
-                if q in r["prompt"].lower()
-                or q in r["negative_prompt"].lower()
-                or q in r["filename"].lower()
-                or q in str(r["params"].get("Model", "")).lower()
-            ]
-        if tool:
-            items = [r for r in items if r["tool"] == tool]
-        total = len(items)
-        page_items = [
-            {k: v for k, v in r.items() if k != "raw"}
-            for r in items[offset : offset + limit]
-        ]
-        return {"total": total, "offset": offset, "items": page_items}
-
-    def get_result(self, file: str) -> dict | None:
-        with self._lock:
-            for r in self.results:
-                if r["file"] == file:
-                    return r
-        return None
+# NOTE: per-job result browsing lives in the library now (db-backed);
+# jobs only keep counters for progress display.
 
 
 class JobManager:

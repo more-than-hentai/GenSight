@@ -2,13 +2,17 @@
 groups, WD Tagger and quality analysis."""
 from __future__ import annotations
 
+import csv
+import io
+import json
 import re as _re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .. import db
+from .. import db, files
 from .. import stats as stats_mod
 from ..quality import quality_manager
 from ..tagger import TaggerUnavailable, tagger_manager
@@ -54,17 +58,64 @@ def library(
     min_rating: int = 0,
     group: str = "",
     quality: str = "",
+    directory: str = "",
     sort: str = "recent",
     offset: int = 0,
     limit: int = 60,
 ):
     total, items = db.query_images(
         q=q, tool=tool, favorite=favorite, min_rating=min_rating,
-        group=group, quality=quality, sort=sort, offset=offset,
-        limit=min(limit, 500),
+        group=group, quality=quality, directory=directory, sort=sort,
+        offset=offset, limit=min(limit, 500),
     )
     return {"total": total, "offset": offset, "items": items,
             "groups": db.group_names()}
+
+
+_EXPORT_PARAM_FIELDS = ["Sampler", "Steps", "CFG scale", "Seed", "Size",
+                        "Model", "Model hash"]
+
+
+@router.get("/library/export")
+def library_export(
+    format: str = "json",
+    q: str = "",
+    tool: str = "",
+    favorite: bool | None = None,
+    min_rating: int = 0,
+    group: str = "",
+    quality: str = "",
+    directory: str = "",
+):
+    """Export the library (respecting the active filters) as JSON/CSV."""
+    if format not in ("json", "csv"):
+        raise HTTPException(400, "format must be json or csv")
+    _total, items = db.query_images(
+        q=q, tool=tool, favorite=favorite, min_rating=min_rating,
+        group=group, quality=quality, directory=directory, limit=1_000_000,
+    )
+    if format == "csv":
+        buf = io.StringIO()
+        head = ["file", "tool", "prompt", "negative_prompt", "rating",
+                "favorite", "group_name", "quality_score"]
+        writer = csv.writer(buf)
+        writer.writerow(head + _EXPORT_PARAM_FIELDS)
+        for r in items:
+            writer.writerow(
+                [r[k] for k in head]
+                + [r["params"].get(f, "") for f in _EXPORT_PARAM_FIELDS]
+            )
+        return StreamingResponse(
+            iter([buf.getvalue()]), media_type="text/csv",
+            headers={"Content-Disposition":
+                     'attachment; filename="gensight_library.csv"'},
+        )
+    body = json.dumps(items, ensure_ascii=False, indent=2, default=str)
+    return StreamingResponse(
+        iter([body]), media_type="application/json",
+        headers={"Content-Disposition":
+                 'attachment; filename="gensight_library.json"'},
+    )
 
 
 @router.get("/library/item")
@@ -104,8 +155,10 @@ def library_summary():
 
 @router.post("/library/cleanup")
 def library_cleanup():
-    """Remove rows for files deleted/moved outside the app."""
-    return {"removed": db.cleanup_missing()}
+    """Remove rows for files deleted/moved outside the app, and
+    orphaned thumbnail cache entries."""
+    return {"removed": db.cleanup_missing(),
+            "thumbs_removed": files.cleanup_thumbs()}
 
 
 @router.get("/stats/prompts")
@@ -123,11 +176,12 @@ def get_watches():
 
 @router.post("/watches")
 def post_watch(body: WatchBody):
-    p = Path(body.directory).expanduser()
-    try:
-        p = p.resolve(strict=True)
-    except (OSError, RuntimeError):
-        raise HTTPException(400, f"directory not found: {body.directory}")
+    p = Path(body.directory).expanduser().resolve()
+    if not p.exists():
+        try:
+            p.mkdir(parents=True)
+        except OSError as e:
+            raise HTTPException(400, f"cannot create directory: {e}")
     if not p.is_dir():
         raise HTTPException(400, f"not a directory: {p}")
     return db.add_watch(str(p), body.recursive, body.poll_interval)

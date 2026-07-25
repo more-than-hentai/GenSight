@@ -29,10 +29,14 @@ Base URL: `http://127.0.0.1:8090`
 
 | Method | Path | 설명 |
 |---|---|---|
-| GET | `/api/jobs/{id}/results?offset&limit&q&tool` | 페이지네이션 + 검색/필터 |
-| GET | `/api/jobs/{id}/result?file=...` | 단일 결과 상세 (raw 포함) |
-| GET | `/api/jobs/{id}/export?format=json\|csv` | 전체 결과 다운로드 |
+| GET | `/api/library?...&directory=...` | 라이브러리 검색 — 작업별 결과는 `directory` 필터로 조회 |
+| GET | `/api/library/export?format=json\|csv&필터...` | 필터 적용 라이브러리 내보내기 |
+| POST | `/api/library/cleanup` | 누락 파일 행 + 고아 썸네일 캐시 정리 |
 | GET | `/api/image?path=...&thumb=true\|false` | 이미지/썸네일 서빙 (허용 경로 하위만) |
+
+> 구 버전의 `/api/jobs/{id}/results`, `/api/jobs/{id}/export`는
+> 라이브러리로 통합되어 제거되었습니다. 작업(`/api/jobs`)은 진행률
+> 추적과 취소 용도로만 유지됩니다.
 
 ## 라이브러리 (SQLite 영구 저장)
 

@@ -55,7 +55,8 @@ def test_scan_unregistered_directory(tmp_path, monkeypatch):
     assert s["status"] == "done"
     assert s["processed"] == 1
 
-    results = client.get(f"/api/jobs/{job_id}/results").json()
+    results = client.get("/api/library", params={"directory": str(imgdir)}).json()
+    assert results["total"] == 1
     assert results["items"][0]["prompt"] == "a cat"
 
     # Files in a scanned (unregistered) directory are servable
@@ -113,5 +114,5 @@ def test_thumbnail_of_corrupt_image(tmp_path, monkeypatch):
 
 def test_export_bad_format(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
-    r = client.get("/api/jobs/deadbeef/export", params={"format": "xml"})
+    r = client.get("/api/library/export", params={"format": "xml"})
     assert r.status_code == 400

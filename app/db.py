@@ -22,6 +22,23 @@ _local = threading.local()
 # EXISTS from multiple threads can still race inside SQLite.
 _schema_lock = threading.Lock()
 
+# Monotonic library change counter. Bumped on every mutation so
+# consumers (stats cache, future views) can cheaply detect staleness
+# without re-reading the tables.
+_version_lock = threading.Lock()
+_data_version = 0
+
+
+def bump_version() -> None:
+    global _data_version
+    with _version_lock:
+        _data_version += 1
+
+
+def data_version() -> int:
+    with _version_lock:
+        return _data_version
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS images (
   path            TEXT PRIMARY KEY,
@@ -174,6 +191,7 @@ def upsert_image(r: dict, phash: str | None = None) -> None:
                 phash, r.get("error"), time.time(),
             ),
         )
+    bump_version()
 
 
 def has_image(path: str) -> bool:
@@ -206,11 +224,15 @@ def query_images(
     min_rating: int = 0,
     group: str = "",
     quality: str = "",
+    directory: str = "",
     sort: str = "recent",
     offset: int = 0,
     limit: int = 60,
 ) -> tuple[int, list[dict]]:
     where, args = [], []
+    if directory:
+        where.append("path LIKE ?")
+        args.append(str(directory).rstrip("/") + "/%")
     if quality == "issues":
         where.append("quality_issues IS NOT NULL AND quality_issues != '[]'")
     elif quality == "low":
@@ -275,6 +297,7 @@ def set_meta(
             conn.execute(
                 f"UPDATE images SET {', '.join(sets)} WHERE path=?", args + [path]
             )
+        bump_version()
     return get_image(path)
 
 
@@ -285,6 +308,7 @@ def set_tags(path: str, tags: list[str]) -> None:
             "UPDATE images SET tags=? WHERE path=?",
             (json.dumps(tags, ensure_ascii=False), path),
         )
+    bump_version()
 
 
 def untagged_paths(limit: int | None = None) -> list[str]:
@@ -361,6 +385,8 @@ def cleanup_missing() -> int:
     gone = [(r["path"],) for r in rows if not Path(r["path"]).exists()]
     with conn:
         conn.executemany("DELETE FROM images WHERE path=?", gone)
+    if gone:
+        bump_version()
     return len(gone)
 
 
@@ -379,6 +405,7 @@ def set_quality(path: str, score: float, issues: list[str]) -> None:
             "UPDATE images SET quality_score=?, quality_issues=? WHERE path=?",
             (score, json.dumps(issues), path),
         )
+    bump_version()
 
 
 def quality_pending_paths(limit: int | None = None) -> list[str]:
@@ -397,6 +424,7 @@ def update_path(old: str, new: str) -> None:
             "UPDATE images SET path=?, filename=? WHERE path=?",
             (new, Path(new).name, old),
         )
+    bump_version()
 
 
 def delete_image_row(path: str) -> dict | None:
@@ -405,6 +433,7 @@ def delete_image_row(path: str) -> dict | None:
         conn = connect()
         with conn:
             conn.execute("DELETE FROM images WHERE path=?", (path,))
+        bump_version()
     return item
 
 
@@ -598,4 +627,6 @@ def apply_groups(overwrite: bool = False) -> int:
                 break
     with conn:
         conn.executemany("UPDATE images SET group_name=? WHERE path=?", updates)
+    if updates:
+        bump_version()
     return len(updates)

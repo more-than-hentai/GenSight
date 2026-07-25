@@ -26,6 +26,7 @@ class OrganizeBody(BaseModel):
     favorite: bool | None = None
     min_rating: int = 0
     quality: str = ""
+    directory: str = ""
 
 
 @router.post("/trash")
@@ -80,7 +81,7 @@ def organize(body: OrganizeBody):
             str(root), template=body.template, dry_run=body.dry_run,
             q=body.q, tool=body.tool, group=body.group,
             favorite=body.favorite, min_rating=body.min_rating,
-            quality=body.quality,
+            quality=body.quality, directory=body.directory,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

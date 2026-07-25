@@ -25,10 +25,33 @@ Claude Desktop의 경우 `claude_desktop_config.json`:
 }
 ```
 
+## 인증
+
+웹 UI에서 인증을 활성화하면 MCP 도구도 함께 잠깁니다. 두 가지 방법으로 해제합니다:
+
+1. **login 도구** — AI 클라이언트에서 `login(username, password)` 호출
+   (웹과 동일한 계정, scrypt 해시 대조)
+2. **환경변수** — MCP 서버 설정에 `GENSIGHT_MCP_PASSWORD`(필요 시
+   `GENSIGHT_MCP_USERNAME`)를 지정하면 자동 인증됩니다:
+
+```json
+{
+  "mcpServers": {
+    "gensight": {
+      "command": ".../python", "args": ["-m", "app.mcp_server"],
+      "env": { "GENSIGHT_MCP_PASSWORD": "..." }
+    }
+  }
+}
+```
+
+인증이 비활성(기본)일 때는 모든 도구가 바로 동작합니다.
+
 ## 제공 도구
 
 | 도구 | 설명 |
 |---|---|
+| `login` | 인증 활성화 시 잠금 해제 (웹과 동일 계정) |
 | `search_images` | 프롬프트/파일명/모델/태그 텍스트 검색 (+도구/즐겨찾기/평점 필터) |
 | `get_image_metadata` | 절대 경로로 단일 이미지의 전체 생성 메타데이터 조회 |
 | `get_prompt_stats` | 전체 라이브러리의 프롬프트 토큰/모델/샘플러 사용 통계 |

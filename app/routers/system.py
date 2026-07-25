@@ -54,6 +54,11 @@ def put_settings(patch: SettingsPatch):
 @router.post("/settings/directories")
 def add_directory(body: DirectoryBody):
     p = Path(body.path).expanduser().resolve()
+    if not p.exists():
+        try:
+            p.mkdir(parents=True)
+        except OSError as e:
+            raise HTTPException(400, f"cannot create directory: {e}")
     if not p.is_dir():
         raise HTTPException(400, f"not a directory: {p}")
     settings = config.load_settings()

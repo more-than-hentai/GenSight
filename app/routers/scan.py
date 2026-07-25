@@ -1,14 +1,14 @@
-"""Scan jobs, single-image analyze, job results and export."""
+"""Scan jobs and single-image analyze.
+
+Per-job result browsing/export was consolidated into the persistent
+library (/api/library with a `directory` filter, /api/library/export);
+jobs remain for progress tracking and cancellation."""
 from __future__ import annotations
 
-import csv
-import io
-import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .. import config, metadata
@@ -83,26 +83,6 @@ def get_job(job_id: str):
     return job.summary()
 
 
-@router.get("/jobs/{job_id}/results")
-def job_results(job_id: str, offset: int = 0, limit: int = 60,
-                q: str = "", tool: str = ""):
-    job = manager.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    return job.page(offset, min(limit, 500), q, tool)
-
-
-@router.get("/jobs/{job_id}/result")
-def job_result_detail(job_id: str, file: str = Query(...)):
-    job = manager.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    result = job.get_result(file)
-    if not result:
-        raise HTTPException(404, "result not found")
-    return result
-
-
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str):
     job = manager.get(job_id)
@@ -117,38 +97,3 @@ def delete_job(job_id: str):
     if not manager.delete(job_id):
         raise HTTPException(404, "job not found")
     return {"ok": True}
-
-
-@router.get("/jobs/{job_id}/export")
-def export_job(job_id: str, format: str = "json"):
-    if format not in ("json", "csv"):
-        raise HTTPException(400, "format must be json or csv")
-    job = manager.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    data = job.page(0, 10**9)["items"]
-    stem = f"gensight_{job_id}"
-    if format == "csv":
-        buf = io.StringIO()
-        fields = [
-            "file", "tool", "prompt", "negative_prompt",
-            "Sampler", "Steps", "CFG scale", "Seed", "Size", "Model", "Model hash",
-        ]
-        writer = csv.writer(buf)
-        writer.writerow(fields)
-        for r in data:
-            writer.writerow(
-                [r["file"], r["tool"], r["prompt"], r["negative_prompt"]]
-                + [r["params"].get(f, "") for f in fields[4:]]
-            )
-        return StreamingResponse(
-            iter([buf.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'},
-        )
-    body = json.dumps(data, ensure_ascii=False, indent=2)
-    return StreamingResponse(
-        iter([body]),
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{stem}.json"'},
-    )

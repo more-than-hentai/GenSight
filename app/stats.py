@@ -3,10 +3,19 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections import Counter
 from typing import Iterator
 
 from . import db
+
+# In-memory materialized result, keyed by the library's change counter.
+# Recomputing token statistics over the whole table on every request
+# gets expensive at tens of thousands of images; the version check
+# makes repeat views O(1) while staying exact (any DB mutation bumps
+# the version and invalidates the cache).
+_cache_lock = threading.Lock()
+_cache: dict = {"version": None, "top": None, "result": None}
 
 _STRIP_CHARS = re.compile(r"[()\[\]{}<>]")
 _TRAILING_WEIGHT = re.compile(r":\s*[0-9.]+\s*$")
@@ -28,6 +37,19 @@ def tokenize(text: str) -> Iterator[str]:
 
 
 def collect(top: int = 50) -> dict:
+    version = db.data_version()
+    with _cache_lock:
+        if _cache["version"] == version and _cache["top"] == top:
+            return _cache["result"]
+
+    result = _collect(top)
+
+    with _cache_lock:
+        _cache.update(version=version, top=top, result=result)
+    return result
+
+
+def _collect(top: int) -> dict:
     conn = db.connect()
     rows = conn.execute(
         "SELECT prompt, negative_prompt, params FROM images WHERE error IS NULL"

@@ -288,6 +288,11 @@ button.ghost { background: none; border: none; font-size: 16px; }
 .q-badge.bad { background: rgba(239,91,91,.15); color: var(--err); }
 .trash-btn { background: none; border: none; padding: 2px 4px; font-size: 13px; }
 .trash-btn:hover { color: var(--err); }
+.dir-chip {
+  cursor: pointer; max-width: 320px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; color: var(--accent);
+}
+.dir-chip:hover { text-decoration: line-through; }
 
 /* organize preview */
 .org-result {
