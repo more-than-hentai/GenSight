@@ -15,6 +15,7 @@
     <button class="tab" data-tab="stats" data-i18n="tab.stats">통계</button>
     <button class="tab" data-tab="settings" data-i18n="tab.settings">설정</button>
   </nav>
+  <button id="logoutBtn" class="ghost hidden" title="로그아웃">⏻</button>
   <select id="themeSelect" title="Theme">
     <option value="dark" data-i18n="theme.dark">다크</option>
     <option value="light" data-i18n="theme.light">라이트</option>
@@ -30,7 +31,7 @@
 <main>
   <!-- ============================ Scan tab -->
   <section id="tab-scan" class="panel active">
-    <div class="card">
+    <div class="card" id="scanCard">
       <h2 data-i18n="scan.title">새 스캔</h2>
       <div class="row">
         <label data-i18n="scan.directory">디렉토리</label>
@@ -61,7 +62,7 @@
       <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.avif,.bmp,.tiff" hidden>
     </div>
 
-    <div class="card">
+    <div class="card" id="jobsCard">
       <h2 data-i18n="scan.jobs">작업 목록</h2>
       <div id="jobList" class="job-list"></div>
     </div>
@@ -285,6 +286,23 @@
           <input type="password" id="authDisablePass" data-i18n-ph="auth.password" placeholder="비밀번호">
           <button id="authDisable" data-i18n="settings.authDisable">인증 해제</button>
         </div>
+        <h3 class="sub-head" data-i18n="settings.users">사용자 관리</h3>
+        <div class="row wrap">
+          <input type="text" id="newUserName" data-i18n-ph="auth.username"
+                 placeholder="사용자명" autocomplete="off">
+          <input type="password" id="newUserPass" data-i18n-ph="auth.password"
+                 placeholder="비밀번호" autocomplete="new-password">
+          <select id="newUserRole">
+            <option value="user" data-i18n="role.user">일반 사용자</option>
+            <option value="admin" data-i18n="role.admin">관리자</option>
+          </select>
+          <button id="addUser" class="primary" data-i18n="settings.add">추가</button>
+        </div>
+        <ul id="userList" class="dir-list"></ul>
+        <p class="hint" data-i18n="settings.usersHint">
+          일반 사용자는 라이브러리 조회/평점, 단일 이미지 분석, 통계만 가능합니다.
+          설정·스캔·파일 작업 등 경로/시스템 관련 기능은 관리자 전용입니다.
+        </p>
       </div>
       <p class="hint" data-i18n="settings.authHint">
         활성화하면 모든 API에 로그인이 필요합니다 (localhost 개인 사용 시에는 불필요).

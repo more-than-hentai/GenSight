@@ -26,10 +26,7 @@ _unlocked = False
 
 
 def _verify(username: str, password: str) -> bool:
-    cfg = auth_mod.auth_config()
-    return username == cfg.get("username") and auth_mod.verify_password(
-        password, cfg.get("salt", ""), cfg.get("password_hash", "")
-    )
+    return auth_mod.authenticate(username, password) is not None
 
 
 def authorize(username: str, password: str) -> bool:
@@ -46,13 +43,12 @@ def require_auth() -> dict | None:
     if not auth_mod.enabled() or _unlocked:
         return None
     env_pw = os.environ.get("GENSIGHT_MCP_PASSWORD")
-    if env_pw and _verify(
-        os.environ.get("GENSIGHT_MCP_USERNAME",
-                       auth_mod.auth_config().get("username", "")),
-        env_pw,
-    ):
-        _unlocked = True
-        return None
+    if env_pw:
+        users = auth_mod.get_users()
+        default_user = users[0]["username"] if users else ""
+        if _verify(os.environ.get("GENSIGHT_MCP_USERNAME", default_user), env_pw):
+            _unlocked = True
+            return None
     return {
         "error": "authentication required: call the login tool with the "
                  "GenSight username/password, or set GENSIGHT_MCP_PASSWORD "

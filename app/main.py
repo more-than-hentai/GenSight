@@ -36,18 +36,54 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+# Endpoints a restricted "user" role may reach. Everything else under
+# /api is admin-only: anything accepting filesystem paths as input or
+# mutating system state (settings, scans, watches, groups, trash,
+# organize, tagger/quality jobs, user management) stays locked down
+# when the instance is exposed beyond localhost.
+USER_ALLOWED_PREFIXES = (
+    "/api/library",      # browse/search/rate (cleanup excluded below)
+    "/api/stats",
+    "/api/analyze",      # single-image upload analysis
+    "/api/image",        # path-validated serving
+    "/api/i18n",
+)
+USER_DENIED_PREFIXES = (
+    "/api/library/cleanup",
+)
+# Reachable without a session so the login screen can work
+PUBLIC_PREFIXES = (
+    "/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/i18n",
+)
+
+
+def _user_allowed(path: str) -> bool:
+    if any(path.startswith(p) for p in USER_DENIED_PREFIXES):
+        return False
+    return any(path.startswith(p) for p in USER_ALLOWED_PREFIXES)
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """When auth is enabled, every /api route except /api/auth/*
-    requires a valid session cookie. Static assets stay public so the
-    login screen can render."""
+    """When auth is enabled: every /api route needs a valid session
+    (except the public auth/i18n endpoints), and non-admin sessions are
+    limited to the read/analyze surface. Static assets stay public so
+    the login screen can render."""
     if auth.enabled():
         path = request.url.path
-        if path.startswith("/api") and not path.startswith("/api/auth/"):
-            if not auth.check(request.cookies.get(auth.COOKIE_NAME)):
+        if path.startswith("/api") and not any(
+            path.startswith(p) for p in PUBLIC_PREFIXES
+        ):
+            info = auth.session_info(request.cookies.get(auth.COOKIE_NAME))
+            if info is None:
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "authentication required"},
+                )
+            if info[1] != "admin" and not _user_allowed(path):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "admin privileges required"},
                 )
     return await call_next(request)
 

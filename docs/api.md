@@ -78,8 +78,18 @@ Base URL: `http://127.0.0.1:8090`
 | DELETE | `/api/trash/{id}` | 개별 영구 삭제 |
 | DELETE | `/api/trash` | 휴지통 비우기 (영구 삭제) |
 | POST | `/api/organize` | 템플릿 기반 파일 이동 `{"target_root","template","dry_run",필터...}` |
-| GET | `/api/auth/status` | 인증 활성/로그인 여부 |
-| POST | `/api/auth/login` `logout` `setup` `disable` | 세션 관리 (scrypt 해시) |
+| GET | `/api/auth/status` | 인증 활성/로그인 여부/역할 |
+| POST | `/api/auth/login` `logout` `setup` `disable` | 세션 관리 (scrypt 해시, disable은 관리자 세션+비밀번호 필요) |
+| GET/POST | `/api/auth/users` | 사용자 목록/추가 `{"username","password","role":"admin"\|"user"}` (관리자 전용) |
+| DELETE | `/api/auth/users/{username}` | 사용자 삭제 (본인·마지막 관리자 삭제 불가) |
+
+### 역할 (인증 활성화 시)
+
+- **admin**: 전체 접근.
+- **user** (제한 계정, 외부 노출용): 허용 — `/api/library*`(cleanup 제외),
+  `/api/stats`, `/api/analyze`, `/api/image`, `/api/i18n`.
+  그 외 `/api/*`는 전부 **403** — 설정/스캔/작업/GPU/감시/그룹/휴지통/정리/
+  품질·태깅 실행/사용자 관리 등 경로 입력·시스템 상태 변경 엔드포인트.
 
 라이브러리 검색에 `quality=` 필터(issues/low/unrated), `sort=quality` 추가.
 인증 활성화 시 `/api/auth/*` 외 모든 `/api/*`는 세션 쿠키 필요(401).

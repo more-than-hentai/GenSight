@@ -335,6 +335,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
   width: min(340px, 90vw);
 }
 .login-box h2 { margin: 0 0 8px; text-align: center; }
+.sub-head { font-size: 13.5px; color: var(--muted); margin: 16px 0 6px; }
 
 /* toast */
 .toast {

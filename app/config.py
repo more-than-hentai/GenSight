@@ -48,7 +48,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "auth": {
         # Optional session auth; managed via /api/auth/*, never expose
         # salt/password_hash through the settings API.
+        # users: [{username, salt, password_hash, role: admin|user}]
+        # (legacy username/salt/password_hash fields are migrated)
         "enabled": False,
+        "users": [],
         "username": "",
         "salt": "",
         "password_hash": "",
