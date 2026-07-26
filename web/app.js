@@ -263,6 +263,7 @@ async function renderTagger() {
     taggerTimer = setTimeout(renderTagger, 1500);
   } else {
     text = `${t("settings.untagged", "미태깅")}: ${s.untagged}` +
+      ` · ${s.gpu ? "GPU" : "CPU"}` +
       (s.job ? ` · ${t("status." + s.job.status, s.job.status)}` : "");
   }
   $("#taggerStatus").textContent = text;

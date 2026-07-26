@@ -1,6 +1,12 @@
 services:
   gensight:
-    build: .
+    build:
+      context: .
+      args:
+        # true = include WD Tagger extras (auto-tagging + content
+        # ratings). Adds ~2 GB for the CUDA runtime; pair it with the
+        # GPU reservation below.
+        WITH_ML: "false"
     ports:
       - "8090:8090"
     volumes:

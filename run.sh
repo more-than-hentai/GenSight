@@ -25,6 +25,23 @@ ensure_venv() {
   fi
 }
 
+# onnxruntime-gpu loads libcudart/libcudnn through the dynamic loader,
+# and the pip-installed CUDA runtime lives inside site-packages rather
+# than a system path. Put those directories on LD_LIBRARY_PATH so the
+# WD Tagger finds a GPU instead of silently failing to import.
+setup_cuda_path() {
+  local nvbase="$PWD/.venv/lib/python3.12/site-packages/nvidia"
+  [ -d "$nvbase" ] || nvbase=$(
+    .venv/bin/python -c 'import nvidia,sys; sys.stdout.write(list(nvidia.__path__)[0])' \
+      2>/dev/null || true)
+  [ -n "$nvbase" ] && [ -d "$nvbase" ] || return 0
+  local libs=""
+  for d in "$nvbase"/*/lib; do
+    [ -d "$d" ] && libs="${libs:+$libs:}$d"
+  done
+  [ -n "$libs" ] && export LD_LIBRARY_PATH="${libs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+}
+
 pid() { cat "$PID_FILE" 2>/dev/null || true; }
 
 is_running() {
@@ -37,6 +54,7 @@ start() {
     return 0
   fi
   ensure_venv
+  setup_cuda_path
   mkdir -p data
   nohup .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" \
     >> "$LOG_FILE" 2>&1 &
@@ -96,6 +114,7 @@ status() {
 case "${1:-run}" in
   run)
     ensure_venv
+    setup_cuda_path
     shift || true
     exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" "$@"
     ;;

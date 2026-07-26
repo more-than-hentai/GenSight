@@ -69,6 +69,20 @@ def _load_deps():
         import onnxruntime
         from huggingface_hub import hf_hub_download
     except ImportError as e:
+        # A missing package and a broken CUDA runtime both surface as
+        # ImportError, but they need different fixes — onnxruntime
+        # raises from its own extension module when libcudart/libcudnn
+        # cannot be loaded. Report the real cause instead of telling
+        # the user to install something they already have.
+        message = str(e)
+        if "libcud" in message or "onnxruntime" in (e.name or ""):
+            raise TaggerUnavailable(
+                f"onnxruntime could not load its CUDA runtime ({message}). "
+                "Reinstall the ML extras (pip install -r requirements-ml.txt) "
+                "so the pip CUDA libraries are present, and start the server "
+                "via ./run.sh so they are on LD_LIBRARY_PATH. For a CPU-only "
+                "host, swap onnxruntime-gpu for onnxruntime."
+            ) from e
         raise TaggerUnavailable(
             f"ML dependency missing: {e.name}. Install with: {INSTALL_HINT}"
         ) from e
@@ -132,12 +146,20 @@ class TaggerManager:
 
     def status(self) -> dict:
         ok, reason = deps_available()
-        untagged = len(db.untagged_paths())
+        gpu_ready = False
+        if ok:
+            try:
+                import onnxruntime as ort
+
+                gpu_ready = "CUDAExecutionProvider" in ort.get_available_providers()
+            except Exception:  # noqa: BLE001
+                gpu_ready = False
         return {
             "available": ok,
             "reason": reason,
+            "gpu": gpu_ready,
             "model": MODEL_REPO,
-            "untagged": untagged,
+            "untagged": len(db.untagged_paths()),
             "job": self.job.summary() if self.job else None,
         }
 
