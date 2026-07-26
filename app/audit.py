@@ -23,8 +23,20 @@ logger = logging.getLogger("gensight.audit")
 # Keep the table bounded; pruning runs opportunistically on write.
 MAX_ROWS = 100_000
 _PRUNE_EVERY = 500
+# Entries carry attacker-influenced text (usernames from failed logins,
+# filesystem paths, prompts). Row count alone does not bound disk use,
+# so cap the fields too.
+MAX_FIELD_CHARS = 512
+MAX_DETAIL_CHARS = 4000
 _write_count = 0
 _lock = threading.Lock()
+
+
+def _clip(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if len(text) <= limit else text[:limit] + "…"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit (
@@ -56,15 +68,22 @@ def record(
     """Append one audit entry. Best effort — never raises."""
     global _write_count
     try:
+        detail_json = (
+            _clip(json.dumps(detail, ensure_ascii=False, default=str),
+                  MAX_DETAIL_CHARS)
+            if detail else None
+        )
         conn = db.connect()
         _ensure(conn)
         with conn:
             conn.execute(
                 "INSERT INTO audit(ts, actor, action, target, detail, ok)"
                 " VALUES (?,?,?,?,?,?)",
-                (time.time(), actor or "system", action, target,
-                 json.dumps(detail, ensure_ascii=False, default=str)
-                 if detail else None,
+                (time.time(),
+                 _clip(actor, MAX_FIELD_CHARS) or "system",
+                 _clip(action, MAX_FIELD_CHARS),
+                 _clip(target, MAX_FIELD_CHARS),
+                 detail_json,
                  1 if ok else 0),
             )
         with _lock:
@@ -96,16 +115,8 @@ def prune(max_rows: int = MAX_ROWS) -> int:
         return 0
 
 
-def query(
-    action: str = "",
-    actor: str = "",
-    q: str = "",
-    since: float | None = None,
-    offset: int = 0,
-    limit: int = 100,
-) -> tuple[int, list[dict]]:
-    conn = db.connect()
-    _ensure(conn)
+def _filters(action: str, actor: str, q: str,
+             since: float | None) -> tuple[str, list]:
     where, args = [], []
     if action:
         where.append("action LIKE ?")
@@ -119,7 +130,31 @@ def query(
     if since:
         where.append("ts >= ?")
         args.append(float(since))
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+    return ("WHERE " + " AND ".join(where)) if where else "", args
+
+
+def _row(r) -> dict:
+    d = dict(r)
+    if d.get("detail"):
+        try:
+            d["detail"] = json.loads(d["detail"])
+        except json.JSONDecodeError:
+            pass
+    d["ok"] = bool(d["ok"])
+    return d
+
+
+def query(
+    action: str = "",
+    actor: str = "",
+    q: str = "",
+    since: float | None = None,
+    offset: int = 0,
+    limit: int = 100,
+) -> tuple[int, list[dict]]:
+    conn = db.connect()
+    _ensure(conn)
+    w, args = _filters(action, actor, q, since)
     limit = max(1, min(int(limit or 100), 1000))
     offset = max(0, int(offset or 0))
     total = conn.execute(f"SELECT COUNT(*) c FROM audit {w}", args).fetchone()["c"]
@@ -127,17 +162,35 @@ def query(
         f"SELECT * FROM audit {w} ORDER BY id DESC LIMIT ? OFFSET ?",
         args + [limit, offset],
     ).fetchall()
-    items = []
-    for r in rows:
-        d = dict(r)
-        if d.get("detail"):
-            try:
-                d["detail"] = json.loads(d["detail"])
-            except json.JSONDecodeError:
-                pass
-        d["ok"] = bool(d["ok"])
-        items.append(d)
-    return total, items
+    return total, [_row(r) for r in rows]
+
+
+def iter_all(action: str = "", actor: str = "", q: str = "",
+             since: float | None = None, chunk: int = 1000):
+    """Yield every matching entry, newest first.
+
+    Export must not silently stop at a page boundary — an audit trail
+    that quietly omits older rows is worse than no export.
+    """
+    conn = db.connect()
+    _ensure(conn)
+    w, args = _filters(action, actor, q, since)
+    last_id = None
+    while True:
+        clause = w
+        page_args = list(args)
+        if last_id is not None:
+            clause = (f"{w} AND id < ?" if w else "WHERE id < ?")
+            page_args.append(last_id)
+        rows = conn.execute(
+            f"SELECT * FROM audit {clause} ORDER BY id DESC LIMIT ?",
+            page_args + [chunk],
+        ).fetchall()
+        if not rows:
+            return
+        for r in rows:
+            yield _row(r)
+        last_id = rows[-1]["id"]
 
 
 def actions() -> list[str]:

@@ -223,7 +223,11 @@ class JobManager:
         with self._queue_cv:
             pending = len(self._pending)
             running = self._running
-        active = [j.summary() for j in self.jobs.values()
+        # Snapshot under the lock: submit()/delete() mutate this dict and
+        # iterating it live can raise "dictionary changed size".
+        with self._lock:
+            jobs = list(self.jobs.values())
+        active = [j.summary() for j in jobs
                   if j.status in ("scanning", "extracting")]
         return {
             "running_jobs": running,
