@@ -328,6 +328,44 @@ button.ghost { background: none; border: none; font-size: 16px; }
   white-space: pre-wrap; word-break: break-all; margin-top: 10px;
 }
 
+/* audit log */
+.audit-list { display: flex; flex-direction: column; gap: 2px; }
+.audit-row {
+  display: grid; grid-template-columns: 150px 120px 170px 1fr auto;
+  gap: 10px; padding: 6px 8px; border-bottom: 1px solid var(--border);
+  font-size: 12.5px; align-items: baseline;
+}
+.audit-row:hover { background: var(--panel2); }
+.audit-row .ts { color: var(--muted); white-space: nowrap; }
+.audit-row .actor { color: var(--syn-key); }
+.audit-row .action { color: var(--syn-head); font-weight: 600; }
+.audit-row .target {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-row .detail {
+  font: 11.5px/1.5 ui-monospace, monospace; color: var(--muted);
+  grid-column: 1 / -1; padding-left: 8px; word-break: break-all;
+}
+.audit-row.fail .action { color: var(--err); }
+.audit-row .badge-ok { font-size: 11px; }
+@media (max-width: 860px) {
+  .audit-row { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* worker status */
+.worker-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.worker-card {
+  background: var(--panel2); border-radius: 8px; padding: 10px 12px;
+}
+.worker-card .k { color: var(--muted); font-size: 12px; }
+.worker-card .v { font-size: 19px; font-weight: 700; margin-top: 2px; }
+.worker-card .v.idle { color: var(--muted); }
+.worker-card .v.busy { color: var(--accent); }
+
 /* login */
 .login-box {
   background: var(--panel); border: 1px solid var(--border); border-radius: 14px;

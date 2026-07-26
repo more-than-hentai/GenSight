@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image, ImageFilter, ImageStat
 
-from . import config, db
+from . import audit, config, db
 
 logger = logging.getLogger("gensight.quality")
 
@@ -134,7 +134,12 @@ class QualityManager:
             return self.job.summary()
 
     def _run(self, job: QualityJob, paths: list[str]) -> None:
+        import time
+
+        started = time.time()
         workers = max(1, int(config.load_settings()["workers"]["extract"]))
+        logger.info("quality analysis started: %d image(s), %d worker(s)",
+                    len(paths), workers)
 
         def work(path: str) -> None:
             if self._cancel.is_set():
@@ -156,14 +161,38 @@ class QualityManager:
             finally:
                 with job.lock:
                     job.processed += 1
+                    done, total = job.processed, job.total
+                step = max(50, total // 20)
+                if done % step == 0 or done == total:
+                    elapsed = time.time() - started
+                    rate = done / elapsed if elapsed else 0
+                    logger.info(
+                        "quality %d/%d (%.0f%%) %.0f img/s, eta %.0fs, errors=%d",
+                        done, total, done / total * 100, rate,
+                        (total - done) / rate if rate else 0, job.errors,
+                    )
 
         try:
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 list(pool.map(work, paths))
             job.status = "cancelled" if self._cancel.is_set() else "done"
+            elapsed = time.time() - started
+            logger.info(
+                "quality analysis %s: %d/%d in %.1fs (%.0f img/s), errors=%d",
+                job.status, job.processed, job.total, elapsed,
+                job.processed / elapsed if elapsed else 0, job.errors,
+            )
+            audit.record("quality.finish", detail={
+                "status": job.status, "processed": job.processed,
+                "total": job.total, "errors": job.errors,
+                "workers": workers, "seconds": round(elapsed, 1),
+            }, ok=job.errors == 0)
         except Exception as e:  # noqa: BLE001
             job.status = "error"
             job.error = f"{type(e).__name__}: {e}"
+            logger.exception("quality job failed")
+            audit.record("quality.finish",
+                         detail={"status": "error", "error": job.error}, ok=False)
 
 
 quality_manager = QualityManager()

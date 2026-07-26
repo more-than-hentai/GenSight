@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import db, metadata
+from . import audit, db, metadata
 from .scanner import process_and_store
 
 logger = logging.getLogger("gensight.watcher")
@@ -76,6 +76,11 @@ class WatchManager:
             target=self._loop, daemon=True, name="gensight-watcher"
         )
         self._thread.start()
+        logger.info(
+            "watcher started: %s, tick=%.0fs, %d watch(es) configured",
+            "watchdog + polling" if HAVE_WATCHDOG else "polling only",
+            TICK_SECONDS, len(db.list_watches()),
+        )
 
     def stop(self) -> None:
         self._stop.set()
@@ -144,17 +149,27 @@ class WatchManager:
     def _drain_pending(self) -> None:
         with self._pending_lock:
             batch, self._pending = self._pending, set()
+        if not batch:
+            return
         now = time.time()
+        ingested = deferred = 0
         for path in batch:
             try:
                 if not path.is_file():
                     continue
                 if now - path.stat().st_mtime < SETTLE_SECONDS:
                     self.enqueue(path)  # still being written; retry next tick
+                    deferred += 1
                     continue
                 process_and_store(path)
+                ingested += 1
             except OSError:
                 continue
+        if ingested or deferred:
+            logger.info(
+                "watcher realtime batch: %d ingested, %d deferred (still writing)",
+                ingested, deferred,
+            )
 
     def _sweep(self, watch: dict) -> None:
         """Incremental polling scan of one watch directory."""
@@ -189,7 +204,16 @@ class WatchManager:
                 processed += 1
         db.touch_watch(watch["id"])
         if processed:
-            logger.info("watch sweep %s: %d file(s) ingested", root, processed)
+            logger.info(
+                "watch sweep %s: %d new/changed file(s) ingested "
+                "(%d known, recursive=%s, interval=%.0fs) in %.1fs",
+                root, processed, len(known), bool(watch["recursive"]),
+                watch["poll_interval"], time.time() - now,
+            )
+            audit.record("watch.ingest", target=str(root),
+                         detail={"ingested": processed})
+        else:
+            logger.debug("watch sweep %s: no changes (%d known)", root, len(known))
 
 
 watch_manager = WatchManager()

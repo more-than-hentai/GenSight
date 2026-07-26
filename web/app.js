@@ -69,6 +69,7 @@ $$(".tab").forEach((btn) =>
     if (btn.dataset.tab === "settings") renderSettings();
     if (btn.dataset.tab === "library") loadLibrary(true);
     if (btn.dataset.tab === "stats") loadStats();
+    if (btn.dataset.tab === "audit") loadAudit(true);
   })
 );
 
@@ -240,6 +241,17 @@ $("#addGroup").onclick = async () => {
     renderGroups();
   } catch (e) { toast(e.message, true); }
 };
+
+async function installPreset(preset) {
+  try {
+    const r = await api.send("POST", `/api/groups/install-preset?preset=${preset}`);
+    $("#presetResult").textContent =
+      `${t("settings.presetInstalled", "설치됨")}: ${r.installed.length}`;
+    renderGroups();
+  } catch (e) { toast(e.message, true); }
+}
+$("#presetStandard").onclick = () => installPreset("standard");
+$("#presetExample").onclick = () => installPreset("example");
 
 $("#applyGroups").onclick = async () => {
   try {
@@ -450,8 +462,9 @@ async function checkLogin() {
 
 function applyRole(role) {
   const restricted = role === "user";
-  // Hide admin-only surfaces: settings tab, scanning, job list
+  // Hide admin-only surfaces: settings tab, audit log, scanning, job list
   $('[data-tab="settings"]').classList.toggle("hidden", restricted);
+  $('[data-tab="audit"]').classList.toggle("hidden", restricted);
   $("#scanCard").classList.toggle("hidden", restricted);
   $("#jobsCard").classList.toggle("hidden", restricted);
   if (restricted) {
@@ -1088,6 +1101,136 @@ async function loadStats() {
   barRows($("#statsSamplers"), s.samplers);
 }
 
+/* ---------------------------------------------------------- audit log */
+
+const auditView = { page: 1, size: 100 };
+
+function auditParams() {
+  return new URLSearchParams({
+    action: $("#auditAction").value,
+    q: $("#auditSearch").value,
+    offset: (auditView.page - 1) * auditView.size,
+    limit: auditView.size,
+  });
+}
+
+async function loadAudit(reset) {
+  if (reset) auditView.page = 1;
+  renderWorkerStatus();
+  let data;
+  try {
+    data = await api.get(`/api/audit?${auditParams()}`);
+  } catch (e) { toast(e.message, true); return; }
+
+  const sel = $("#auditAction");
+  const prev = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  for (const a of data.actions) {
+    const o = document.createElement("option");
+    o.value = o.textContent = a;
+    sel.appendChild(o);
+  }
+  sel.value = prev;
+
+  $("#auditCount").textContent = `${t("results.count", "결과")}: ${data.total}`;
+  const box = $("#auditList");
+  box.innerHTML = "";
+  if (!data.items.length) {
+    box.innerHTML = `<p class="hint">${t("audit.empty", "기록이 없습니다.")}</p>`;
+  }
+  for (const r of data.items) {
+    const el = document.createElement("div");
+    el.className = "audit-row" + (r.ok ? "" : " fail");
+    const when = new Date(r.ts * 1000).toLocaleString();
+    el.innerHTML = `
+      <span class="ts">${escapeHtml(when)}</span>
+      <span class="actor">${escapeHtml(r.actor || "system")}</span>
+      <span class="action">${escapeHtml(r.action)}</span>
+      <span class="target" title="${escapeHtml(r.target || "")}">${escapeHtml(r.target || "")}</span>
+      <span class="badge-ok">${r.ok ? "✓" : "✕"}</span>`;
+    if (r.detail) {
+      const d = document.createElement("span");
+      d.className = "detail";
+      d.textContent = typeof r.detail === "string"
+        ? r.detail : JSON.stringify(r.detail);
+      el.appendChild(d);
+    }
+    box.appendChild(el);
+  }
+  renderAuditPager(data.total);
+}
+
+function renderAuditPager(total) {
+  const pager = $("#auditPager");
+  pager.innerHTML = "";
+  const pages = Math.max(1, Math.ceil(total / auditView.size));
+  if (pages <= 1) return;
+  const mk = (label, page, opts = {}) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (opts.current) b.classList.add("current");
+    b.disabled = !!opts.disabled;
+    if (!opts.disabled && !opts.current) {
+      b.onclick = () => { auditView.page = page; loadAudit(false); };
+    }
+    pager.appendChild(b);
+  };
+  mk("«", auditView.page - 1, { disabled: auditView.page === 1 });
+  mk(String(auditView.page), auditView.page, { current: true });
+  mk("»", auditView.page + 1, { disabled: auditView.page === pages });
+  const span = document.createElement("span");
+  span.className = "total";
+  span.textContent = `${auditView.page}/${pages} · ${total}`;
+  pager.appendChild(span);
+}
+
+async function renderWorkerStatus() {
+  let s;
+  try { s = await api.get("/api/status/workers"); } catch { return; }
+  const scan = s.scan, w = s.watcher;
+  const cards = [
+    [t("worker.runningJobs", "실행 중 스캔"), scan.running_jobs,
+     `/ ${t("worker.max", "최대")} ${scan.max_concurrent_jobs}`],
+    [t("worker.queuedJobs", "대기 중 스캔"), scan.queued_jobs, ""],
+    [t("worker.extractWorkers", "활성 추출 워커"), scan.active_extract_workers, ""],
+    [t("settings.watcher", "감시 상태"), w.running ? "✓" : "✗",
+     w.realtime ? "watchdog + polling" : "polling"],
+    [t("worker.watchPending", "감시 대기"), w.pending, ""],
+  ];
+  const box = $("#workerStatus");
+  box.innerHTML = "";
+  for (const [k, v, note] of cards) {
+    const el = document.createElement("div");
+    el.className = "worker-card";
+    const busy = typeof v === "number" ? v > 0 : v === "✓";
+    el.innerHTML = `<div class="k">${escapeHtml(k)}</div>` +
+      `<div class="v ${busy ? "busy" : "idle"}">${escapeHtml(String(v))}</div>` +
+      (note ? `<div class="k">${escapeHtml(note)}</div>` : "");
+    box.appendChild(el);
+  }
+  if (w.last_error) {
+    const el = document.createElement("div");
+    el.className = "worker-card";
+    el.innerHTML = `<div class="k">${t("status.error", "오류")}</div>` +
+      `<div class="k">${escapeHtml(w.last_error)}</div>`;
+    box.appendChild(el);
+  }
+}
+
+$("#auditRefresh").onclick = () => loadAudit(true);
+$("#auditAction").onchange = () => loadAudit(true);
+let auditTimer;
+$("#auditSearch").oninput = () => {
+  clearTimeout(auditTimer);
+  auditTimer = setTimeout(() => loadAudit(true), 300);
+};
+$("#auditExport").onclick = () => {
+  const p = new URLSearchParams({
+    action: $("#auditAction").value, q: $("#auditSearch").value,
+  });
+  window.open(`/api/audit/export?${p}`, "_blank");
+};
+
 /* ---------------------------------------------------------- detail modal */
 
 function openDetailData(r, opts = {}) {
@@ -1416,7 +1559,7 @@ function activateTab(name) {
     if (state.role !== "user") pollJobs();
     // Deep links: /#library /#stats /#settings and ?detail=<path>
     const hashTab = location.hash.replace("#", "");
-    if (["scan", "library", "stats", "settings"].includes(hashTab)) {
+    if (["scan", "library", "stats", "settings", "audit"].includes(hashTab)) {
       activateTab(hashTab);
     }
     const detailPath = new URLSearchParams(location.search).get("detail");

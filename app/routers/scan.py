@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile
 from PIL import Image
 from pydantic import BaseModel
 
-from .. import config, metadata
+from .. import audit, config, metadata
 from ..scanner import manager, process_and_store
 
 router = APIRouter(prefix="/api", tags=["scan"])
@@ -33,6 +33,10 @@ UPLOAD_DIR_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
 # Pillow's global limit for trusted local scans, so uploads need their
 # own explicit bound.
 MAX_UPLOAD_PIXELS = 80_000_000
+
+def _actor(request: Request) -> str:
+    return getattr(request.state, "auth_user", "") or ""
+
 
 _rate_lock = threading.Lock()
 _upload_hits: dict[str, deque] = defaultdict(deque)
@@ -99,7 +103,7 @@ class ScanBody(BaseModel):
 
 
 @router.post("/scan")
-def start_scan(body: ScanBody):
+def start_scan(body: ScanBody, request: Request):
     """Start a scan. The directory does not need to be registered in
     settings — any readable local directory can be scanned ad hoc."""
     settings = config.load_settings()
@@ -115,6 +119,9 @@ def start_scan(body: ScanBody):
     recursive = body.recursive if body.recursive is not None else settings["recursive"]
     workers = body.workers or settings["workers"]["extract"]
     job = manager.submit(str(path), recursive, workers)
+    audit.record("scan.start", actor=_actor(request), target=str(path),
+                 detail={"job": job.id, "recursive": recursive,
+                         "workers": job.workers})
     return job.summary()
 
 
@@ -162,6 +169,9 @@ async def analyze_upload(request: Request, file: UploadFile):
     result = process_and_store(dest)
     result["uploaded"] = True
     result["original_name"] = safe_name
+    audit.record("analyze.upload", actor=_actor(request), target=str(dest),
+                 detail={"original_name": safe_name, "bytes": written,
+                         "tool": result.get("tool")})
     return result
 
 
@@ -179,11 +189,13 @@ def get_job(job_id: str):
 
 
 @router.post("/jobs/{job_id}/cancel")
-def cancel_job(job_id: str):
+def cancel_job(job_id: str, request: Request):
     job = manager.get(job_id)
     if not job:
         raise HTTPException(404, "job not found")
     job.cancel()
+    audit.record("scan.cancel", actor=_actor(request), target=job.directory,
+                 detail={"job": job_id})
     return job.summary()
 
 
