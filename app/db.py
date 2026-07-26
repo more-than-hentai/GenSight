@@ -85,6 +85,21 @@ CREATE TABLE IF NOT EXISTS trash (
   item          TEXT NOT NULL,
   trashed_at    REAL NOT NULL
 );
+
+-- Login accounts (optional auth). Salts/hashes live here rather than in
+-- settings.json so credential writes get the same WAL-protected
+-- transactions as everything else in the app, instead of a JSON
+-- read-modify-write that can lose a concurrent update; it also keeps
+-- secrets out of a config file an admin might paste into a support
+-- request. `version` bumps on every write and backs session
+-- invalidation (auth.revoke_sessions / session_info).
+CREATE TABLE IF NOT EXISTS users (
+  username      TEXT PRIMARY KEY,
+  salt          TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'user',
+  version       INTEGER NOT NULL DEFAULT 1
+);
 """
 
 # Columns added after the initial release; applied via ALTER TABLE so
@@ -696,3 +711,129 @@ def apply_groups(overwrite: bool = False) -> int:
     if updates:
         bump_version()
     return len(updates)
+
+
+# ---------------------------------------------------------------- users
+
+
+def list_users() -> list[dict]:
+    rows = connect().execute(
+        "SELECT username, salt, password_hash, role, version FROM users"
+        " ORDER BY username"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_user(username: str) -> dict | None:
+    row = connect().execute(
+        "SELECT username, salt, password_hash, role, version FROM users"
+        " WHERE username=?",
+        (username,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_user(username: str, salt: str, password_hash: str,
+                role: str) -> int | None:
+    """Insert or replace an account in one atomic statement.
+
+    The version bump (`users.version + 1`) is computed by SQLite in the
+    UPSERT itself rather than pre-read in Python: a pre-read-then-write
+    lets two concurrent writes to the same username both compute the
+    same "next" version, so the loser's credentials win but the
+    version looks unchanged — a session minted against the loser's
+    write would then wrongly keep validating. Doing the increment as
+    part of the single write closes that: SQLite serializes writers, so
+    the second writer's `users.version + 1` is evaluated against the
+    first writer's already-committed row.
+
+    The same statement also refuses, atomically, to demote an account
+    from admin if that would leave zero admins — closing a race where
+    two concurrent demotions (or an admin deleting the last other
+    admin while a third request demotes them) could otherwise both
+    pass a Python-level "count the admins" check before either commits.
+
+    Returns the new version, or None if the write was refused because
+    it would have removed the last admin.
+    """
+    conn = connect()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO users(username, salt, password_hash, role, version)
+               VALUES (?,?,?,?,1)
+               ON CONFLICT(username) DO UPDATE SET
+                 salt=excluded.salt, password_hash=excluded.password_hash,
+                 role=excluded.role, version=users.version + 1
+               WHERE NOT (
+                 users.role = 'admin' AND excluded.role != 'admin' AND
+                 (SELECT COUNT(*) FROM users u2
+                  WHERE u2.role = 'admin' AND u2.username != users.username) = 0
+               )""",
+            (username, salt, password_hash, role),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT version FROM users WHERE username=?", (username,)
+        ).fetchone()
+    return row["version"] if row else None
+
+
+def import_legacy_users(users: list[dict]) -> None:
+    """Bulk-insert accounts migrated from settings.json as ONE atomic
+    transaction — all land or none do.
+
+    Without this, a caller inserting them one upsert_user() call at a
+    time (each its own commit) could be interrupted partway: the users
+    table would end up non-empty (so the "already migrated, skip"
+    check in auth.py treats the migration as done) while some legacy
+    accounts were never imported and their settings.json entry was
+    never cleared either — silently and permanently unreachable.
+    """
+    if not users:
+        return
+    conn = connect()
+    with conn:
+        for u in users:
+            conn.execute(
+                """INSERT INTO users(username, salt, password_hash, role, version)
+                   VALUES (?,?,?,?,1)
+                   ON CONFLICT(username) DO NOTHING""",
+                (u["username"], u.get("salt", ""), u.get("password_hash", ""),
+                 u.get("role", "admin")),
+            )
+
+
+def delete_user_row(username: str) -> str:
+    """Delete an account. Returns 'deleted', 'not_found', or
+    'last_admin'.
+
+    The invariant ("at least one admin remains") is enforced inside the
+    DELETE's own WHERE clause rather than a separate count-then-delete
+    in Python, so two admins concurrently deleting each other cannot
+    both pass the check before either commits: SQLite serializes the
+    two DELETE statements, and the second one's subquery re-counts
+    admins against the first's already-committed result.
+    """
+    conn = connect()
+    with conn:
+        cur = conn.execute(
+            """DELETE FROM users WHERE username = ? AND (
+                 role != 'admin' OR
+                 (SELECT COUNT(*) FROM users
+                  WHERE role='admin' AND username != ?) > 0
+               )""",
+            (username, username),
+        )
+        if cur.rowcount > 0:
+            return "deleted"
+        # rowcount 0 means either the username never existed, or it
+        # exists but the guard above blocked the delete (last admin).
+        # This lookup runs before the transaction started above
+        # commits, so nothing else can have changed the row in
+        # between — telling the two cases apart needs no pre-delete
+        # existence check (and the race window that would create).
+        exists = conn.execute(
+            "SELECT 1 FROM users WHERE username=?", (username,)
+        ).fetchone()
+    return "last_admin" if exists else "not_found"

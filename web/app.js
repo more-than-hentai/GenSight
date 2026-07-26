@@ -448,13 +448,24 @@ $("#authDisable").onclick = async () => {
 
 /* -------- login overlay -------- */
 
+function renderUserChip() {
+  const s = state.authStatus;
+  const signedIn = !!(s && s.enabled && s.authenticated);
+  $("#logoutBtn").classList.toggle("hidden", !signedIn);
+  const chip = $("#userChip");
+  chip.classList.toggle("hidden", !signedIn);
+  chip.textContent = signedIn
+    ? `👤 ${s.username} · ${t("role." + s.role, s.role)}` : "";
+}
+
 async function checkLogin() {
   try {
     const s = await api.get("/api/auth/status");
+    state.authStatus = s;
     state.role = s.enabled ? s.role : "admin";
     const need = s.enabled && !s.authenticated;
     $("#loginOverlay").classList.toggle("hidden", !need);
-    $("#logoutBtn").classList.toggle("hidden", !(s.enabled && s.authenticated));
+    renderUserChip();
     if (!need) applyRole(state.role);
     return !need;
   } catch { state.role = "admin"; return true; }
@@ -1627,6 +1638,7 @@ function activateTab(name) {
   } catch (e) {
     toast(`${t("toast.loadFailed", "불러오기 실패")}: ${e.message}`, true);
   }
+  renderUserChip(); // re-render with the now-loaded i18n strings
   if (loggedIn) {
     if (state.role !== "user") pollJobs();
     // Deep links: /#library /#stats /#settings and ?detail=<path>

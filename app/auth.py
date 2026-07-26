@@ -8,11 +8,16 @@ Two roles:
   main.py), so a "user" account is safe to hand out when the instance
   is exposed beyond localhost.
 
-Passwords are hashed with stdlib hashlib.scrypt. Accounts live in
-settings.json under auth.users; the legacy single-admin fields
-(username/salt/password_hash) are migrated transparently. Sessions are
-opaque tokens in an in-memory store (a restart just requires logging
-in again).
+Passwords are hashed with stdlib hashlib.scrypt. Accounts live in the
+SQLite `users` table (db.py) — the same WAL-protected storage as the
+rest of the app — rather than settings.json, so a credential write
+cannot race a concurrent read-modify-write the way a JSON file can, and
+salts/hashes never sit in a config file someone might share for
+support. Older installs that still have accounts in settings.json (the
+"auth.users" list, or the original single-admin fields) are migrated
+into the table transparently on first access. Sessions are opaque
+tokens in an in-memory store (a restart just requires logging in
+again).
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ import secrets
 import threading
 import time
 
-from . import config
+from . import config, db
 
 COOKIE_NAME = "gensight_session"
 SESSION_TTL = 7 * 24 * 3600
@@ -65,30 +70,47 @@ def enabled() -> bool:
 # ---------------------------------------------------------------- users
 
 
-def get_users() -> list[dict]:
+def _migrate_legacy_users() -> None:
+    """One-time move of accounts out of settings.json into the users
+    table (see module docstring for why). Cheap and idempotent — a
+    no-op the instant the table has at least one row — so every entry
+    point can just call it rather than tracking whether it ran.
+
+    The import itself (db.import_legacy_users) is one atomic
+    transaction, so an interruption partway can never leave the table
+    non-empty with some legacy accounts still stranded in settings.json
+    — it is either fully imported or not imported at all, and "table
+    non-empty" stays a reliable "already migrated" signal either way.
+    (The narrower case of the DB commit succeeding but the process
+    dying before the settings.json clear below persists is harmless: on
+    the next call the table is already non-empty so migration is
+    correctly skipped, just leaving inert, already-superseded secrets
+    sitting in the JSON file rather than truly two-phase-committing
+    across two separate storage systems for a one-time historical
+    bridge.)
+    """
+    if db.list_users():
+        return
     cfg = auth_config()
-    users = [dict(u) for u in cfg.get("users") or []]
-    if not users and cfg.get("username") and cfg.get("password_hash"):
-        # Legacy single-admin layout -> migrate in place
-        users = [{
-            "username": cfg["username"], "salt": cfg.get("salt", ""),
-            "password_hash": cfg["password_hash"], "role": "admin",
-        }]
-    return users
+    legacy = [dict(u) for u in cfg.get("users") or []]
+    if not legacy and cfg.get("username") and cfg.get("password_hash"):
+        legacy = [{"username": cfg["username"], "salt": cfg.get("salt", ""),
+                  "password_hash": cfg["password_hash"], "role": "admin"}]
+    if not legacy:
+        return
+    db.import_legacy_users(legacy)
+    config.update_settings({"auth": {"users": [], "username": "",
+                                     "salt": "", "password_hash": ""}})
 
 
-def _save_users(users: list[dict], enabled_flag: bool | None = None) -> None:
-    patch = {"users": users, "username": "", "salt": "", "password_hash": ""}
-    if enabled_flag is not None:
-        patch["enabled"] = enabled_flag
-    config.update_settings({"auth": patch})
+def get_users() -> list[dict]:
+    _migrate_legacy_users()
+    return db.list_users()
 
 
 def find_user(username: str) -> dict | None:
-    for u in get_users():
-        if u["username"] == username:
-            return u
-    return None
+    _migrate_legacy_users()
+    return db.get_user(username)
 
 
 def revoke_sessions(username: str) -> int:
@@ -111,28 +133,28 @@ def cred_version(username: str) -> int:
 def add_user(username: str, password: str, role: str = "user") -> None:
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}")
+    _migrate_legacy_users()
     salt, digest = hash_password(password)
-    previous = find_user(username)
-    version = int((previous or {}).get("version", 0)) + 1
-    users = [u for u in get_users() if u["username"] != username]
-    users.append({"username": username, "salt": salt,
-                  "password_hash": digest, "role": role, "version": version})
-    _save_users(users)
+    version = db.upsert_user(username, salt, digest, role)
+    if version is None:
+        # db.upsert_user refuses atomically — this can trigger even
+        # after a caller's own pre-check passed, if a concurrent
+        # request already demoted/removed the other admin(s) first.
+        raise ValueError("cannot demote the last admin account")
     # Replacing an account (password reset / role change) must not leave
-    # the previous role alive in an existing cookie. The version bump
-    # also invalidates a session minted by a login that raced this
-    # update: session_info rejects any token whose version is stale.
+    # the previous role alive in an existing cookie. upsert_user's
+    # version bump also invalidates a session minted by a login that
+    # raced this update: session_info rejects any token whose version
+    # is stale.
     revoke_sessions(username)
 
 
 def delete_user(username: str) -> None:
-    users = get_users()
-    remaining = [u for u in users if u["username"] != username]
-    if len(remaining) == len(users):
+    result = db.delete_user_row(username)
+    if result == "not_found":
         raise KeyError(f"no such user: {username}")
-    if not any(u.get("role") == "admin" for u in remaining):
+    if result == "last_admin":
         raise ValueError("cannot delete the last admin account")
-    _save_users(remaining)
     revoke_sessions(username)
 
 
@@ -164,11 +186,12 @@ def _account_snapshot(username: str, password: str) -> tuple[str, int] | None:
 def set_credentials(username: str, password: str) -> None:
     """Enable auth with an admin account (initial setup)."""
     add_user(username, password, role="admin")
-    _save_users(get_users(), enabled_flag=True)
+    config.update_settings({"auth": {"enabled": True}})
 
 
 def disable() -> None:
-    """Turn auth off. Accounts are kept for a later re-enable."""
+    """Turn auth off. Accounts stay in the database for a later
+    re-enable — disabling is a toggle, not a wipe."""
     config.update_settings({"auth": {"enabled": False}})
     with _lock:
         _sessions.clear()

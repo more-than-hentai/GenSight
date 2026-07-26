@@ -35,6 +35,8 @@ def _png_bytes():
 
 
 def test_legacy_single_admin_migrates(tmp_path, monkeypatch):
+    """Old settings.json accounts must land in the users table, and the
+    JSON fields must be cleared so they cannot be migrated twice."""
     _use_tmp_data(tmp_path, monkeypatch)
     salt, digest = auth.hash_password("oldpass")
     config.update_settings({"auth": {
@@ -43,8 +45,33 @@ def test_legacy_single_admin_migrates(tmp_path, monkeypatch):
     }})
     users = auth.get_users()
     assert users == [{"username": "olduser", "salt": salt,
-                      "password_hash": digest, "role": "admin"}]
+                      "password_hash": digest, "role": "admin", "version": 1}]
     assert auth.authenticate("olduser", "oldpass") == "admin"
+
+    # Migrated into the DB, not left duplicated in settings.json
+    from app import db
+
+    assert db.get_user("olduser") is not None
+    leftover = config.load_settings()["auth"]
+    assert leftover["username"] == "" and leftover["users"] == []
+    auth.disable()
+
+
+def test_legacy_users_list_migrates(tmp_path, monkeypatch):
+    """The newer (pre-DB) settings.json layout — a users list rather
+    than the single-admin fields — must migrate the same way."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    salt, digest = auth.hash_password("pw1")
+    config.update_settings({"auth": {
+        "enabled": True,
+        "users": [{"username": "u1", "salt": salt, "password_hash": digest,
+                   "role": "user"}],
+    }})
+    assert auth.authenticate("u1", "pw1") == "user"
+    from app import db
+
+    assert db.get_user("u1")["role"] == "user"
+    assert config.load_settings()["auth"]["users"] == []
     auth.disable()
 
 

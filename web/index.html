@@ -16,7 +16,11 @@
     <button class="tab" data-tab="audit" data-i18n="tab.audit">감사 로그</button>
     <button class="tab" data-tab="settings" data-i18n="tab.settings">설정</button>
   </nav>
-  <button id="logoutBtn" class="ghost hidden" title="로그아웃">⏻</button>
+  <div class="header-right">
+  <span id="userChip" class="user-chip hidden"></span>
+  <button id="logoutBtn" class="hidden" title="로그아웃">
+    <span aria-hidden="true">⏻</span> <span data-i18n="auth.logout">로그아웃</span>
+  </button>
   <select id="themeSelect" title="Theme">
     <option value="dark" data-i18n="theme.dark">다크</option>
     <option value="light" data-i18n="theme.light">라이트</option>
@@ -27,6 +31,7 @@
     <option value="en">English</option>
     <option value="ja">日本語</option>
   </select>
+  </div>
 </header>
 
 <main>

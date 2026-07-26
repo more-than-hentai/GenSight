@@ -129,10 +129,10 @@ def create_user(body: UserBody, request: Request):
     if not username or len(body.password) < 4:
         raise HTTPException(400, "username required, password min 4 chars")
     existing = auth.find_user(username)
-    if existing and existing.get("role") == "admin" and body.role != "admin":
-        admins = [u for u in auth.get_users() if u.get("role") == "admin"]
-        if len(admins) == 1:
-            raise HTTPException(400, "cannot demote the last admin account")
+    # The last-admin guard against demotion lives in db.upsert_user()
+    # now: it runs inside the same atomic statement as the write, so it
+    # stays correct even if two demotions race each other. (A
+    # Python-level pre-check here would only re-add that race.)
     # Read the caller's identity before add_user revokes their session.
     caller = _session(request)
     try:
