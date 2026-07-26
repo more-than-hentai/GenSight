@@ -5,11 +5,11 @@ import hashlib
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from PIL import Image
 
-from .. import config, db, files
+from .. import config, db, files, metadata
 from ..scanner import manager
 
 logger = logging.getLogger("gensight")
@@ -24,10 +24,28 @@ _PLACEHOLDER_PNG = bytes.fromhex(
 )
 
 
-def validate_path(raw: str) -> Path:
-    """Serve only files under registered/scanned/watched roots, or
-    files already present in the library DB."""
+def validate_path(raw: str, *, indexed_only: bool = False) -> Path:
+    """Resolve a request path to a servable file.
+
+    Only files with a supported image extension are ever served — the
+    configured roots hold user data (.env, keys, exports) that this
+    endpoint must never hand out.
+
+    indexed_only restricts the file further to rows that exist in the
+    library DB. It is set for non-admin callers so a restricted account
+    cannot walk a scan root and read files that were never scanned.
+    """
     p = Path(raw).resolve()
+    if p.suffix.lower() not in metadata.SUPPORTED_EXTENSIONS:
+        raise HTTPException(403, "not an image file")
+
+    if indexed_only:
+        if not db.has_image(str(p)):
+            raise HTTPException(403, "not in library")
+        if not p.is_file():
+            raise HTTPException(404, "file not found")
+        return p
+
     job_dirs = [j["directory"] for j in manager.list()]
     for root in files.allowed_roots(extra_job_dirs=job_dirs):
         if p == root or root in p.parents:
@@ -42,8 +60,9 @@ def validate_path(raw: str) -> Path:
 
 
 @router.get("/image")
-def get_image(path: str = Query(...), thumb: bool = False):
-    p = validate_path(path)
+def get_image(request: Request, path: str = Query(...), thumb: bool = False):
+    role = getattr(request.state, "auth_role", "admin")
+    p = validate_path(path, indexed_only=(role != "admin"))
     if not thumb:
         return FileResponse(p)
     try:

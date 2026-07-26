@@ -91,6 +91,18 @@ def find_user(username: str) -> dict | None:
     return None
 
 
+def revoke_sessions(username: str) -> int:
+    """Drop every live session for a user. Called whenever an account
+    changes, so a password reset or a demotion takes effect at once
+    instead of leaving the old role usable for the session TTL."""
+    with _lock:
+        stale = [tok for tok, (name, _r, _e) in _sessions.items()
+                 if name == username]
+        for tok in stale:
+            _sessions.pop(tok, None)
+    return len(stale)
+
+
 def add_user(username: str, password: str, role: str = "user") -> None:
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}")
@@ -99,6 +111,9 @@ def add_user(username: str, password: str, role: str = "user") -> None:
     users.append({"username": username, "salt": salt,
                   "password_hash": digest, "role": role})
     _save_users(users)
+    # Replacing an account (password reset / role change) must not leave
+    # the previous role alive in an existing cookie.
+    revoke_sessions(username)
 
 
 def delete_user(username: str) -> None:
@@ -109,10 +124,7 @@ def delete_user(username: str) -> None:
     if not any(u.get("role") == "admin" for u in remaining):
         raise ValueError("cannot delete the last admin account")
     _save_users(remaining)
-    with _lock:
-        for token, (name, _role, _exp) in list(_sessions.items()):
-            if name == username:
-                _sessions.pop(token, None)
+    revoke_sessions(username)
 
 
 def authenticate(username: str, password: str) -> str | None:
