@@ -10,7 +10,7 @@ services:
       # override with GENSIGHT_PORT=8095 docker compose ...
       - "${GENSIGHT_PORT:-8090}:8090"
     volumes:
-      - ./data:/opt/gensight/data
+      - ${GENSIGHT_DATA:-./data}:/opt/gensight/data
       # Mount your image directories read-only, then register the
       # container-side paths (/images/...) in the web UI settings.
       # - /path/to/your/images:/images/set1:ro
@@ -37,11 +37,19 @@ services:
       # override with GENSIGHT_PORT=8095 docker compose ...
       - "${GENSIGHT_PORT:-8090}:8090"
     volumes:
-      - ./data:/opt/gensight/data
+      - ${GENSIGHT_DATA:-./data}:/opt/gensight/data
       # - /path/to/your/images:/images/set1:ro
     restart: unless-stopped
     # Requires nvidia-container-toolkit on the host. Without it the
     # container still runs, but the tagger falls back to CPU.
+    #
+    # If this fails with "could not select device driver" the toolkit is
+    # not registered with the daemon yet:
+    #   sudo nvidia-ctk runtime configure --runtime=docker
+    #   sudo systemctl restart docker
+    # On setups where Docker's device autodetection misfires ("AMD CDI
+    # spec not found"), swap the block below for CDI:
+    #   devices: ["nvidia.com/gpu=all"]
     deploy:
       resources:
         reservations:
