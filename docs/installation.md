@@ -101,12 +101,29 @@ docker compose --profile cuda13 up -d --build
 포트 충돌 시 `GENSIGHT_PORT=8095 docker compose ...`로 바꿀 수 있습니다.
 
 > **GPU를 실제로 쓰려면 호스트에 `nvidia-container-toolkit`이 필요합니다.**
-> 없으면 `could not select device driver "nvidia"`로 컨테이너가 뜨지 않습니다.
-> Ubuntu 기준 설치:
+> 패키지 설치만으로는 부족하고 **데몬에 런타임을 등록**해야 합니다 —
+> 등록 전에는 `could not select device driver "nvidia"`로 컨테이너가 뜨지 않습니다.
 > ```bash
-> sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+> sudo apt-get install -y nvidia-container-toolkit
+> sudo nvidia-ctk runtime configure --runtime=docker   # /etc/docker/daemon.json 생성
+> sudo systemctl restart docker                        # 실행 중이던 컨테이너는 재시작됩니다
 > ```
+> 확인: `docker info | grep Runtimes`에 `nvidia`가 보이면 정상입니다.
+>
+> 등록했는데도 `AMD CDI spec not found` 같은 오류가 나면 Docker의 디바이스
+> 드라이버 자동 감지가 오작동하는 경우입니다. compose의 `deploy.resources`
+> 블록을 CDI 형식으로 바꾸세요:
+> ```yaml
+>     devices: ["nvidia.com/gpu=all"]
+> ```
+>
 > 설정 → WD Tagger 상태에 `GPU`로 표시되면 정상입니다(장치가 안 보이면 `CPU`).
+
+호스트 서버와 동시에 띄워 시험하려면 포트·데이터 경로를 분리하세요:
+
+```bash
+GENSIGHT_PORT=8095 GENSIGHT_DATA=/tmp/gs-test docker compose --profile cuda13 up -d
+```
 
 ### Docker에서 WD Tagger 사용
 
