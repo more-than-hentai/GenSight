@@ -1,22 +1,21 @@
 services:
+  # Default CPU/CUDA-12 image. WD Tagger extras are optional and off by
+  # default (they add ~2 GB of pip-installed CUDA 12 runtime).
   gensight:
     build:
       context: .
       args:
-        # true = include WD Tagger extras (auto-tagging + content
-        # ratings). Adds ~2 GB for the CUDA runtime; pair it with the
-        # GPU reservation below.
         WITH_ML: "false"
     ports:
-      - "8090:8090"
+      # override with GENSIGHT_PORT=8095 docker compose ...
+      - "${GENSIGHT_PORT:-8090}:8090"
     volumes:
       - ./data:/opt/gensight/data
       # Mount your image directories read-only, then register the
       # container-side paths (/images/...) in the web UI settings.
       # - /path/to/your/images:/images/set1:ro
     restart: unless-stopped
-    # For future GPU-based ML analysis, uncomment (requires
-    # nvidia-container-toolkit):
+    # GPU on a CUDA 12 host — requires nvidia-container-toolkit.
     # deploy:
     #   resources:
     #     reservations:
@@ -24,3 +23,29 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
+
+  # CUDA 13 host: the runtime comes from NVIDIA's base image because the
+  # nvidia-*-cu13 pip wheels are stubs. Tagger extras are always on here.
+  #   docker compose --profile cuda13 build
+  #   docker compose --profile cuda13 up -d
+  gensight-cuda13:
+    profiles: ["cuda13"]
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda13
+    ports:
+      # override with GENSIGHT_PORT=8095 docker compose ...
+      - "${GENSIGHT_PORT:-8090}:8090"
+    volumes:
+      - ./data:/opt/gensight/data
+      # - /path/to/your/images:/images/set1:ro
+    restart: unless-stopped
+    # Requires nvidia-container-toolkit on the host. Without it the
+    # container still runs, but the tagger falls back to CPU.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
