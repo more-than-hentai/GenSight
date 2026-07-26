@@ -157,5 +157,22 @@
   "toast.copiedWithImage": "이미지와 함께 복사되었습니다",
   "toast.analyzed": "분석 완료",
   "toast.analyzeFailed": "분석 실패",
-  "toast.loadFailed": "불러오기 실패"
+  "toast.loadFailed": "불러오기 실패",
+  "tab.audit": "감사 로그",
+  "audit.title": "감사 로그",
+  "audit.allActions": "전체 동작",
+  "audit.search": "대상/상세 검색",
+  "audit.refresh": "새로고침",
+  "audit.empty": "기록이 없습니다.",
+  "audit.workers": "워커 / 동시성 상태",
+  "audit.hint": "상태를 바꾼 동작(스캔·삭제·설정·계정 등)의 영구 기록입니다. 진행 상황 로그는 data/gensight-app.log에 별도로 남습니다.",
+  "worker.runningJobs": "실행 중 스캔",
+  "worker.queuedJobs": "대기 중 스캔",
+  "worker.extractWorkers": "활성 추출 워커",
+  "worker.watchPending": "감시 대기",
+  "worker.max": "최대",
+  "settings.presets": "시작 규칙:",
+  "settings.presetStandard": "표준 카테고리 설치",
+  "settings.presetExample": "예제 그룹 설치",
+  "settings.presetInstalled": "설치됨"
 }

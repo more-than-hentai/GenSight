@@ -105,6 +105,21 @@ Base URL: `http://127.0.0.1:8090`
 라이브러리 검색에 `quality=` 필터(issues/low/unrated), `sort=quality` 추가.
 인증 활성화 시 `/api/auth/*` 외 모든 `/api/*`는 세션 쿠키 필요(401).
 
+## 감사 로그 / 상태 / 그룹 프리셋
+
+| Method | Path | 설명 |
+|---|---|---|
+| GET | `/api/audit?action&actor&q&since&offset&limit` | 감사 로그 조회 (`action`은 접두어 매칭) |
+| GET | `/api/audit/export` | 감사 로그 CSV |
+| GET | `/api/status/workers` | 스캔 슬롯·활성 워커·감시 스레드 상태 |
+| GET | `/api/groups/presets` | 프리셋 규칙 미리보기 |
+| POST | `/api/groups/install-preset?preset=standard\|example` | 프리셋 설치 (동일 이름은 교체) |
+
+감사 대상 동작: `app.start`, `auth.*`(login/logout/enable/disable/user_upsert/
+user_delete), `settings.*`, `scan.start|cancel|finish`, `analyze.upload`,
+`watch.*`, `group.*`, `tagger.run|cancel|finish`, `quality.run|cancel|finish`,
+`trash.*`, `organize.apply`, `library.cleanup`.
+
 MCP 서버는 [mcp.md](mcp.md), 구조/프레임워크 검토는 [architecture.md](architecture.md) 참조.
 
 ## 결과 객체

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import config, db
+from . import audit, config, db
 
 logger = logging.getLogger("gensight.tagger")
 
@@ -193,8 +193,13 @@ class TaggerManager:
     # -- worker side -------------------------------------------------
 
     def _run(self, job: TagJob, paths: list[str]) -> None:
+        import time
+
+        started = time.time()
         try:
             np, ort, hf_hub_download = _load_deps()
+            logger.info("tagging %d image(s); fetching model %s",
+                        len(paths), MODEL_REPO)
             model_path = hf_hub_download(MODEL_REPO, "model.onnx")
             labels_path = hf_hub_download(MODEL_REPO, "selected_tags.csv")
             names, categories = _load_labels(labels_path)
@@ -216,6 +221,12 @@ class TaggerManager:
                             ],
                         )
                     )
+                logger.info(
+                    "tagger using %d GPU session(s) on device(s) %s, "
+                    "%d worker(s) each (%d total)",
+                    len(sessions), devices, jobs_per_gpu,
+                    len(sessions) * jobs_per_gpu,
+                )
             else:
                 sessions.append(
                     ort.InferenceSession(
@@ -223,6 +234,9 @@ class TaggerManager:
                     )
                 )
                 jobs_per_gpu = 1
+                reason = ("no GPU enabled in settings" if not devices
+                          else "CUDAExecutionProvider unavailable")
+                logger.info("tagger running on CPU (%s), 1 worker", reason)
 
             work_q: queue.Queue[str] = queue.Queue()
             for p in paths:
@@ -248,6 +262,20 @@ class TaggerManager:
                     finally:
                         with job.lock:
                             job.processed += 1
+                            done, total = job.processed, job.total
+                        # Progress every 5% (min 25 images) so a long run
+                        # leaves a trail without flooding the log.
+                        step = max(25, total // 20)
+                        if done % step == 0 or done == total:
+                            elapsed = time.time() - started
+                            rate = done / elapsed if elapsed else 0
+                            eta = (total - done) / rate if rate else 0
+                            logger.info(
+                                "tagging %d/%d (%.0f%%) %.1f img/s, eta %.0fs, "
+                                "errors=%d",
+                                done, total, done / total * 100, rate, eta,
+                                job.errors,
+                            )
 
             threads = []
             for session in sessions:
@@ -258,10 +286,23 @@ class TaggerManager:
             for t in threads:
                 t.join()
             job.status = "cancelled" if self._cancel.is_set() else "done"
+            elapsed = time.time() - started
+            logger.info(
+                "tagging %s: %d/%d in %.1fs (%.1f img/s), errors=%d",
+                job.status, job.processed, job.total, elapsed,
+                job.processed / elapsed if elapsed else 0, job.errors,
+            )
+            audit.record("tagger.finish", detail={
+                "status": job.status, "processed": job.processed,
+                "total": job.total, "errors": job.errors,
+                "seconds": round(elapsed, 1),
+            }, ok=job.errors == 0)
         except Exception as e:  # noqa: BLE001
             job.status = "error"
             job.error = f"{type(e).__name__}: {e}"
             logger.exception("tag job failed")
+            audit.record("tagger.finish", detail={"status": "error",
+                                                  "error": job.error}, ok=False)
 
 
 tagger_manager = TaggerManager()

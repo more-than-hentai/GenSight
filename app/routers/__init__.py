@@ -1,4 +1,4 @@
-from . import auth, library, media, scan, system, trash
+from . import audit_log, auth, library, media, scan, system, trash
 
 ALL = [
     system.router,
@@ -6,5 +6,6 @@ ALL = [
     library.router,
     media.router,
     trash.router,
+    audit_log.router,
     auth.router,
 ]

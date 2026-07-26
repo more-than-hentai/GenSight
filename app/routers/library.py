@@ -8,17 +8,21 @@ import json
 import re as _re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .. import db, files
+from .. import audit, db, files, group_presets
 from .. import stats as stats_mod
 from ..quality import quality_manager
 from ..tagger import TaggerUnavailable, tagger_manager
 from ..watcher import watch_manager
 
 router = APIRouter(prefix="/api", tags=["library"])
+
+
+def _actor(request: Request) -> str:
+    return getattr(request.state, "auth_user", "") or ""
 
 
 class MetaPatch(BaseModel):
@@ -158,11 +162,13 @@ def library_summary():
 
 
 @router.post("/library/cleanup")
-def library_cleanup():
+def library_cleanup(request: Request):
     """Remove rows for files deleted/moved outside the app, and
     orphaned thumbnail cache entries."""
-    return {"removed": db.cleanup_missing(),
-            "thumbs_removed": files.cleanup_thumbs()}
+    result = {"removed": db.cleanup_missing(),
+              "thumbs_removed": files.cleanup_thumbs()}
+    audit.record("library.cleanup", actor=_actor(request), detail=result)
+    return result
 
 
 @router.get("/stats/prompts")
@@ -179,7 +185,7 @@ def get_watches():
 
 
 @router.post("/watches")
-def post_watch(body: WatchBody):
+def post_watch(body: WatchBody, request: Request):
     p = Path(body.directory).expanduser().resolve()
     if not p.exists():
         try:
@@ -188,19 +194,26 @@ def post_watch(body: WatchBody):
             raise HTTPException(400, f"cannot create directory: {e}")
     if not p.is_dir():
         raise HTTPException(400, f"not a directory: {p}")
-    return db.add_watch(str(p), body.recursive, body.poll_interval)
+    watch = db.add_watch(str(p), body.recursive, body.poll_interval)
+    audit.record("watch.add", actor=_actor(request), target=str(p),
+                 detail={"recursive": body.recursive,
+                         "poll_interval": body.poll_interval})
+    return watch
 
 
 @router.patch("/watches/{watch_id}")
-def patch_watch(watch_id: int, patch: WatchPatch):
+def patch_watch(watch_id: int, patch: WatchPatch, request: Request):
     db.update_watch(watch_id, enabled=patch.enabled,
                     poll_interval=patch.poll_interval)
+    audit.record("watch.update", actor=_actor(request), target=str(watch_id),
+                 detail=patch.model_dump(exclude_none=True))
     return {"ok": True}
 
 
 @router.delete("/watches/{watch_id}")
-def remove_watch(watch_id: int):
+def remove_watch(watch_id: int, request: Request):
     db.delete_watch(watch_id)
+    audit.record("watch.delete", actor=_actor(request), target=str(watch_id))
     return {"ok": True}
 
 
@@ -213,10 +226,14 @@ def get_groups():
 
 
 @router.post("/groups")
-def post_group(body: GroupBody):
+def post_group(body: GroupBody, request: Request):
     try:
-        return db.add_group(body.name.strip(), body.pattern, body.is_regex,
-                            body.target)
+        group = db.add_group(body.name.strip(), body.pattern, body.is_regex,
+                             body.target)
+        audit.record("group.add", actor=_actor(request), target=body.name,
+                     detail={"pattern": body.pattern,
+                             "is_regex": body.is_regex, "target": body.target})
+        return group
     except _re.error as e:
         raise HTTPException(400, f"invalid regex: {e}")
     except ValueError as e:
@@ -224,14 +241,37 @@ def post_group(body: GroupBody):
 
 
 @router.delete("/groups/{group_id}")
-def remove_group(group_id: int):
+def remove_group(group_id: int, request: Request):
     db.delete_group(group_id)
+    audit.record("group.delete", actor=_actor(request), target=str(group_id))
     return {"ok": True}
 
 
 @router.post("/groups/apply")
-def apply_groups(overwrite: bool = False):
-    return {"updated": db.apply_groups(overwrite=overwrite)}
+def apply_groups(request: Request, overwrite: bool = False):
+    updated = db.apply_groups(overwrite=overwrite)
+    audit.record("group.apply", actor=_actor(request),
+                 detail={"overwrite": overwrite, "updated": updated})
+    return {"updated": updated}
+
+
+@router.post("/groups/install-preset")
+def install_preset(request: Request, preset: str = "standard"):
+    """Seed starter rules. Existing names are replaced, others kept."""
+    try:
+        rules = group_presets.entries(preset)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    installed = []
+    for r in rules:
+        try:
+            db.add_group(r["name"], r["pattern"], r["is_regex"], r["target"])
+            installed.append(r["name"])
+        except (_re.error, ValueError) as e:
+            raise HTTPException(400, f"{r['name']}: {e}")
+    audit.record("group.install_preset", actor=_actor(request), target=preset,
+                 detail={"installed": installed})
+    return {"preset": preset, "installed": installed}
 
 
 # ---------------------------------------------------------------- tagger
@@ -243,16 +283,20 @@ def tagger_status():
 
 
 @router.post("/tagger/run")
-def tagger_run(body: RunBody):
+def tagger_run(body: RunBody, request: Request):
     try:
-        return tagger_manager.run(limit=body.limit)
+        summary = tagger_manager.run(limit=body.limit)
+        audit.record("tagger.run", actor=_actor(request),
+                     detail={"limit": body.limit, "total": summary["total"]})
+        return summary
     except (TaggerUnavailable, RuntimeError) as e:
         raise HTTPException(409, str(e))
 
 
 @router.post("/tagger/cancel")
-def tagger_cancel():
+def tagger_cancel(request: Request):
     tagger_manager.cancel()
+    audit.record("tagger.cancel", actor=_actor(request))
     return {"ok": True}
 
 
@@ -265,14 +309,18 @@ def quality_status():
 
 
 @router.post("/quality/run")
-def quality_run(body: RunBody):
+def quality_run(body: RunBody, request: Request):
     try:
-        return quality_manager.run(limit=body.limit)
+        summary = quality_manager.run(limit=body.limit)
+        audit.record("quality.run", actor=_actor(request),
+                     detail={"limit": body.limit, "total": summary["total"]})
+        return summary
     except RuntimeError as e:
         raise HTTPException(409, str(e))
 
 
 @router.post("/quality/cancel")
-def quality_cancel():
+def quality_cancel(request: Request):
     quality_manager.cancel()
+    audit.record("quality.cancel", actor=_actor(request))
     return {"ok": True}

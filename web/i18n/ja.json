@@ -157,5 +157,22 @@
   "toast.copiedWithImage": "画像と一緒にコピーしました",
   "toast.analyzed": "分析完了",
   "toast.analyzeFailed": "分析失敗",
-  "toast.loadFailed": "読み込み失敗"
+  "toast.loadFailed": "読み込み失敗",
+  "tab.audit": "監査ログ",
+  "audit.title": "監査ログ",
+  "audit.allActions": "すべての操作",
+  "audit.search": "対象／詳細を検索",
+  "audit.refresh": "更新",
+  "audit.empty": "記録がありません。",
+  "audit.workers": "ワーカー／並行処理の状態",
+  "audit.hint": "状態を変更した操作（スキャン・削除・設定・アカウントなど）の永続記録です。進捗ログは data/gensight-app.log に別途出力されます。",
+  "worker.runningJobs": "実行中のスキャン",
+  "worker.queuedJobs": "待機中のスキャン",
+  "worker.extractWorkers": "稼働中の抽出ワーカー",
+  "worker.watchPending": "監視の保留",
+  "worker.max": "最大",
+  "settings.presets": "スタータールール:",
+  "settings.presetStandard": "標準カテゴリを追加",
+  "settings.presetExample": "サンプルグループを追加",
+  "settings.presetInstalled": "追加済み"
 }

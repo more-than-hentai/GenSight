@@ -5,17 +5,21 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .. import config, gpu
+from .. import audit, config, gpu
 
 logger = logging.getLogger("gensight")
 
 router = APIRouter(prefix="/api", tags=["system"])
 
 WEB_DIR = config.BASE_DIR / "web"
+
+
+def _actor(request: Request) -> str:
+    return getattr(request.state, "auth_user", "") or ""
 
 
 class SettingsPatch(BaseModel):
@@ -46,13 +50,15 @@ def get_settings():
 
 
 @router.put("/settings")
-def put_settings(patch: SettingsPatch):
-    config.update_settings(patch.model_dump(exclude_none=True))
+def put_settings(patch: SettingsPatch, request: Request):
+    changes = patch.model_dump(exclude_none=True)
+    config.update_settings(changes)
+    audit.record("settings.update", actor=_actor(request), detail=changes)
     return public_settings()
 
 
 @router.post("/settings/directories")
-def add_directory(body: DirectoryBody):
+def add_directory(body: DirectoryBody, request: Request):
     p = Path(body.path).expanduser().resolve()
     if not p.exists():
         try:
@@ -65,14 +71,16 @@ def add_directory(body: DirectoryBody):
     if str(p) not in settings["directories"]:
         settings["directories"].append(str(p))
         config.save_settings(settings)
+        audit.record("settings.dir_add", actor=_actor(request), target=str(p))
     return public_settings()
 
 
 @router.delete("/settings/directories")
-def remove_directory(path: str = Query(...)):
+def remove_directory(request: Request, path: str = Query(...)):
     settings = config.load_settings()
     settings["directories"] = [d for d in settings["directories"] if d != path]
     config.save_settings(settings)
+    audit.record("settings.dir_remove", actor=_actor(request), target=path)
     return public_settings()
 
 

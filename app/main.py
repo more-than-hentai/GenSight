@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, auth, config, routers
+from . import __version__, audit, auth, config, logging_config, routers
 from .watcher import watch_manager
 
 logger = logging.getLogger("gensight")
@@ -24,6 +24,9 @@ WEB_DIR = config.BASE_DIR / "web"
 
 @app.on_event("startup")
 def _startup() -> None:
+    logging_config.setup()
+    logger.info("GenSight %s starting", __version__)
+    audit.record("app.start", detail={"version": __version__})
     watch_manager.start()
 
 

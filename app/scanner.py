@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from . import config, db, imghash, metadata
+from . import audit, config, db, imghash, metadata
 
 logger = logging.getLogger("gensight.scanner")
 
@@ -76,10 +76,16 @@ class ScanJob:
 
     def run(self) -> None:
         self.started_at = time.time()
+        logger.info(
+            "scan %s started: %s (recursive=%s, %d extract worker(s))",
+            self.id, self.directory, self.recursive, self.workers,
+        )
         try:
             self.status = "scanning"
             files = self._enumerate()
             self.total = len(files)
+            logger.info("scan %s: enumerated %d image file(s) in %.1fs",
+                        self.id, self.total, time.time() - self.started_at)
             if self._cancel.is_set():
                 self.status = "cancelled"
                 return
@@ -89,8 +95,23 @@ class ScanJob:
         except Exception as e:  # noqa: BLE001
             self.status = "error"
             self.error = f"{type(e).__name__}: {e}"
+            logger.exception("scan %s failed", self.id)
         finally:
             self.finished_at = time.time()
+            elapsed = self.finished_at - (self.started_at or self.finished_at)
+            logger.info(
+                "scan %s %s: %d/%d processed, %d with metadata, %.1fs (%.0f img/s)",
+                self.id, self.status, self.processed, self.total,
+                self.with_metadata, elapsed,
+                self.processed / elapsed if elapsed else 0,
+            )
+            audit.record("scan.finish", target=self.directory, detail={
+                "job": self.id, "status": self.status,
+                "processed": self.processed, "total": self.total,
+                "with_metadata": self.with_metadata,
+                "workers": self.workers, "seconds": round(elapsed, 1),
+                "error": self.error,
+            }, ok=self.status == "done")
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -137,6 +158,16 @@ class ScanJob:
                 self.processed += 1
                 if item["prompt"] or len(item["params"]) > 1:
                     self.with_metadata += 1
+                done, total = self.processed, self.total
+            step = max(200, total // 20)
+            if done % step == 0 or done == total:
+                elapsed = time.time() - (self.started_at or time.time())
+                rate = done / elapsed if elapsed else 0
+                logger.info(
+                    "scan %s: %d/%d (%.0f%%) %.0f img/s, eta %.0fs",
+                    self.id, done, total, done / total * 100 if total else 100,
+                    rate, (total - done) / rate if rate else 0,
+                )
 
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             list(pool.map(work, files))
@@ -179,8 +210,28 @@ class JobManager:
             self._order.insert(0, job.id)
         with self._queue_cv:
             self._pending.append(job)
+            queued, running = len(self._pending), self._running
             self._queue_cv.notify()
+        logger.info(
+            "scan %s queued: %s (workers=%d); %d running, %d queued, max %d",
+            job.id, directory, job.workers, running, queued, self._max_jobs(),
+        )
         return job
+
+    def concurrency(self) -> dict:
+        """Live worker/queue picture for the status API."""
+        with self._queue_cv:
+            pending = len(self._pending)
+            running = self._running
+        active = [j.summary() for j in self.jobs.values()
+                  if j.status in ("scanning", "extracting")]
+        return {
+            "running_jobs": running,
+            "queued_jobs": pending,
+            "max_concurrent_jobs": self._max_jobs(),
+            "active_extract_workers": sum(j["workers"] for j in active),
+            "active": active,
+        }
 
     def _dispatcher(self) -> None:
         while True:
@@ -197,7 +248,10 @@ class JobManager:
         finally:
             with self._queue_cv:
                 self._running -= 1
+                remaining, pending = self._running, len(self._pending)
                 self._queue_cv.notify()
+            logger.info("scan %s slot released; %d running, %d queued",
+                        job.id, remaining, pending)
 
     @staticmethod
     def _max_jobs() -> int:

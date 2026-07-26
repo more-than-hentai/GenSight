@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .. import auth
+from .. import audit, auth
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -57,10 +57,14 @@ def status(request: Request):
 
 
 @router.post("/login")
-def login(body: LoginBody):
+def login(body: LoginBody, request: Request):
     token = auth.login(body.username, body.password)
+    client = request.client.host if request.client else ""
     if not token:
+        audit.record("auth.login", actor=body.username, target=client,
+                     detail={"result": "invalid credentials"}, ok=False)
         raise HTTPException(401, "invalid credentials")
+    audit.record("auth.login", actor=body.username, target=client)
     resp = JSONResponse({"ok": True})
     resp.set_cookie(
         auth.COOKIE_NAME, token, httponly=True, samesite="lax",
@@ -71,7 +75,9 @@ def login(body: LoginBody):
 
 @router.post("/logout")
 def logout(request: Request):
+    info = _session(request)
     auth.logout(request.cookies.get(auth.COOKIE_NAME))
+    audit.record("auth.logout", actor=info[0] if info else "")
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(auth.COOKIE_NAME)
     return resp
@@ -85,6 +91,7 @@ def setup(body: SetupBody, request: Request):
     if not username or len(body.password) < 4:
         raise HTTPException(400, "username required, password min 4 chars")
     auth.set_credentials(username, body.password)
+    audit.record("auth.enable", actor=username)
     return _login_response(username, body.password)
 
 
@@ -101,6 +108,7 @@ def disable(body: DisableBody):
     ):
         raise HTTPException(401, "invalid password")
     auth.disable()
+    audit.record("auth.disable")
     return {"ok": True, "enabled": False}
 
 
@@ -131,6 +139,9 @@ def create_user(body: UserBody, request: Request):
         auth.add_user(username, body.password, body.role)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    audit.record("auth.user_upsert", actor=caller[0] if caller else "",
+                 target=username,
+                 detail={"role": body.role, "existed": existing is not None})
     # Re-issue a cookie when an admin just changed their own credentials
     # so the revocation does not sign them out mid-session.
     if caller and caller[0] == username:
@@ -149,4 +160,6 @@ def remove_user(username: str, request: Request):
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
+    audit.record("auth.user_delete", actor=info[0] if info else "",
+                 target=username)
     return {"ok": True}

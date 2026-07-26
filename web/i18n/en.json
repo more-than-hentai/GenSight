@@ -157,5 +157,22 @@
   "toast.copiedWithImage": "Copied with image",
   "toast.analyzed": "Analysis complete",
   "toast.analyzeFailed": "Analysis failed",
-  "toast.loadFailed": "Failed to load"
+  "toast.loadFailed": "Failed to load",
+  "tab.audit": "Audit",
+  "audit.title": "Audit log",
+  "audit.allActions": "All actions",
+  "audit.search": "Search target / detail",
+  "audit.refresh": "Refresh",
+  "audit.empty": "No entries yet.",
+  "audit.workers": "Workers / concurrency",
+  "audit.hint": "Durable record of actions that changed state (scans, deletions, settings, accounts). Progress logs go to data/gensight-app.log instead.",
+  "worker.runningJobs": "Running scans",
+  "worker.queuedJobs": "Queued scans",
+  "worker.extractWorkers": "Active extract workers",
+  "worker.watchPending": "Watch pending",
+  "worker.max": "max",
+  "settings.presets": "Starter rules:",
+  "settings.presetStandard": "Install standard categories",
+  "settings.presetExample": "Install example groups",
+  "settings.presetInstalled": "Installed"
 }

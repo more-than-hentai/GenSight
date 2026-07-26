@@ -16,14 +16,47 @@ data/
 
 ## 로그
 
-uvicorn 표준 출력으로 로그가 나갑니다. 스캔 중 개별 파일 오류는
-서버를 중단시키지 않고 해당 결과의 `error` 필드에 기록됩니다.
-썸네일 생성 실패는 `WARNING` 로그 후 플레이스홀더 이미지로 응답합니다.
+두 가지가 있습니다 — 목적이 다릅니다.
+
+| | 애플리케이션 로그 | 감사 로그 |
+|---|---|---|
+| 위치 | `data/gensight-app.log` (10MB × 5 로테이션) | SQLite `audit` 테이블 |
+| 내용 | 진행률·속도·워커 수·경고 등 동작 추적 | 상태를 바꾼 동작의 영구 기록 |
+| 조회 | `tail -f data/gensight-app.log` | 웹 UI **감사 로그** 탭, `/api/audit` |
+| 수명 | 로테이션으로 사라짐 | 10만 건까지 보존 후 오래된 것부터 정리 |
+
+`./run.sh start`의 콘솔 출력(`data/gensight.log`)에는 uvicorn 액세스 로그가
+함께 들어갑니다. 레벨 조정:
 
 ```bash
-# systemd 등으로 운영 시 로그 레벨 조정
-.venv/bin/uvicorn app.main:app --port 8090 --log-level warning
+GENSIGHT_LOG_LEVEL=DEBUG ./run.sh restart
 ```
+
+기록되는 진행 로그 예:
+
+```
+scan 7726072b0902 queued: /imgs (workers=3); 0 running, 1 queued, max 2
+scan 7726072b0902: enumerated 12 image file(s) in 0.0s
+scan 7726072b0902: 12/12 (100%) 2 img/s, eta 0s
+scan 7726072b0902 done: 12/12 processed, 12 with metadata, 6.8s (2 img/s)
+tagger using 1 GPU session(s) on device(s) [0], 1 worker(s) each (1 total)
+quality analysis started: 500 image(s), 10 worker(s)
+watch sweep /imgs: 3 new/changed file(s) ingested (120 known, ...) in 0.4s
+```
+
+스캔 중 개별 파일 오류는 서버를 중단시키지 않고 해당 결과의 `error` 필드에
+기록됩니다. 썸네일 생성 실패는 `WARNING` 후 플레이스홀더로 응답합니다.
+
+### 감사 로그
+
+계정·설정·스캔·삭제·정리·태깅 등 상태 변경 동작을 누가 언제 했는지 남깁니다
+(`actor`는 인증이 켜져 있을 때 세션 사용자, 아니면 `system`). 감사 기록 실패가
+원래 동작을 막지는 않습니다. 관리자 전용이며 CSV로 내보낼 수 있습니다.
+
+### 워커 / 동시성 상태
+
+감사 로그 탭 상단에서 실행 중·대기 중 스캔 수, 활성 추출 워커 수, 감시 스레드
+상태를 실시간으로 확인할 수 있습니다 (`GET /api/status/workers`).
 
 ## 테스트
 
