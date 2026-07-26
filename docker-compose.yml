@@ -9,6 +9,12 @@ services:
     ports:
       # override with GENSIGHT_PORT=8095 docker compose ...
       - "${GENSIGHT_PORT:-8090}:8090"
+    # Write data as the host user instead of root. Without this the
+    # container creates root-owned files in the bind-mounted data dir,
+    # which a venv-run server (./run.sh) can then no longer write.
+    # Override when your account is not 1000:1000:
+    #   GENSIGHT_UID=$(id -u) GENSIGHT_GID=$(id -g) docker compose up -d
+    user: "${GENSIGHT_UID:-1000}:${GENSIGHT_GID:-1000}"
     volumes:
       - ${GENSIGHT_DATA:-./data}:/opt/gensight/data
       # Mount your image directories read-only, then register the
@@ -36,6 +42,12 @@ services:
     ports:
       # override with GENSIGHT_PORT=8095 docker compose ...
       - "${GENSIGHT_PORT:-8090}:8090"
+    # Write data as the host user instead of root. Without this the
+    # container creates root-owned files in the bind-mounted data dir,
+    # which a venv-run server (./run.sh) can then no longer write.
+    # Override when your account is not 1000:1000:
+    #   GENSIGHT_UID=$(id -u) GENSIGHT_GID=$(id -g) docker compose up -d
+    user: "${GENSIGHT_UID:-1000}:${GENSIGHT_GID:-1000}"
     volumes:
       - ${GENSIGHT_DATA:-./data}:/opt/gensight/data
       # - /path/to/your/images:/images/set1:ro

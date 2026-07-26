@@ -56,8 +56,17 @@ start() {
   ensure_venv
   setup_cuda_path
   mkdir -p data
-  nohup .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" \
-    >> "$LOG_FILE" 2>&1 &
+  # setsid, not just nohup: nohup only blocks SIGHUP, so a server started
+  # from a terminal or tooling session still dies when that session's
+  # process group is terminated. setsid puts uvicorn in its own session
+  # so it genuinely outlives the shell that launched it.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" \
+      >> "$LOG_FILE" 2>&1 < /dev/null &
+  else
+    nohup .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" \
+      >> "$LOG_FILE" 2>&1 < /dev/null &
+  fi
   echo $! > "$PID_FILE"
   # Wait until the port answers (max ~10s)
   for _ in $(seq 1 20); do
