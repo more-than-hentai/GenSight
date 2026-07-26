@@ -13,3 +13,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Codex/gstack scratch
+.gstack/
