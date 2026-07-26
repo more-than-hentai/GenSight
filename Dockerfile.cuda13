@@ -1,0 +1,48 @@
+# GPU image for the WD Tagger on CUDA 13 hosts.
+#
+# The default Dockerfile targets CUDA 12 through pip-installed runtime
+# wheels. That path does not exist for CUDA 13: the nvidia-*-cu13
+# runtime/cuBLAS packages on PyPI are 0.0.1 stubs, so the runtime has to
+# come from NVIDIA's own base image instead.
+#
+#   docker compose --profile cuda13 build
+#   docker compose --profile cuda13 up
+#
+# Running with GPUs additionally requires nvidia-container-toolkit on
+# the host; without it the container still starts and the tagger falls
+# back to CPU.
+FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/gensight
+
+# Self-contained venv: Ubuntu 24.04 marks the system Python as
+# externally managed, so pip refuses to install into it.
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt requirements-ml.txt ./
+# onnxruntime-gpu >= 1.23 links against libcudart.so.13, which this base
+# image provides — so install it directly rather than the CUDA 12 pin
+# in requirements-ml.txt.
+RUN pip install --no-cache-dir -r requirements.txt \
+ && pip install --no-cache-dir numpy huggingface_hub "onnxruntime-gpu>=1.23"
+
+COPY app ./app
+COPY web ./web
+
+ENV GENSIGHT_DATA_DIR=/opt/gensight/data
+# Keep the tagger model in the data volume across container rebuilds.
+ENV HF_HOME=/opt/gensight/data/hf
+VOLUME ["/opt/gensight/data"]
+
+EXPOSE 8090
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]

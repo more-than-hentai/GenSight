@@ -85,6 +85,29 @@ docker compose up --build -d
 이후 웹 UI 설정에서 **컨테이너 내부 경로**(`/images/ai-images`)를 등록하거나,
 스캔 탭에서 해당 경로를 직접 입력합니다.
 
+### CUDA 13 호스트
+
+CUDA 13에서는 pip 런타임 경로를 쓸 수 없습니다 — PyPI의
+`nvidia-cuda-runtime-cu13` / `nvidia-cublas-cu13`은 0.0.1 스텁입니다.
+NVIDIA 공식 베이스 이미지를 쓰는 전용 프로파일을 사용하세요:
+
+```bash
+docker compose --profile cuda13 up -d --build
+```
+
+`Dockerfile.cuda13`이 `nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04` 위에
+`onnxruntime-gpu>=1.23`(CUDA 13 빌드)을 설치합니다. 이미지 약 3.55GB.
+
+포트 충돌 시 `GENSIGHT_PORT=8095 docker compose ...`로 바꿀 수 있습니다.
+
+> **GPU를 실제로 쓰려면 호스트에 `nvidia-container-toolkit`이 필요합니다.**
+> 없으면 `could not select device driver "nvidia"`로 컨테이너가 뜨지 않습니다.
+> Ubuntu 기준 설치:
+> ```bash
+> sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+> ```
+> 설정 → WD Tagger 상태에 `GPU`로 표시되면 정상입니다(장치가 안 보이면 `CPU`).
+
 ### Docker에서 WD Tagger 사용
 
 기본 이미지에는 ML 의존성이 **포함되지 않습니다**(CUDA 런타임 때문에 약 2GB

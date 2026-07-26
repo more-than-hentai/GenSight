@@ -151,7 +151,16 @@ class TaggerManager:
             try:
                 import onnxruntime as ort
 
-                gpu_ready = "CUDAExecutionProvider" in ort.get_available_providers()
+                from . import gpu as gpu_mod
+
+                # The CUDA provider being compiled in says nothing about
+                # a device being reachable — a container without
+                # nvidia-container-toolkit lists the provider but has no
+                # GPU. Require both.
+                gpu_ready = (
+                    "CUDAExecutionProvider" in ort.get_available_providers()
+                    and bool(gpu_mod.list_gpus())
+                )
             except Exception:  # noqa: BLE001
                 gpu_ready = False
         return {
