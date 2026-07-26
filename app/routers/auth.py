@@ -1,4 +1,4 @@
-"""Authentication endpoints (session cookie based, optional)."""
+"""Authentication endpoints (session cookie based, optional roles)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
@@ -24,16 +24,35 @@ class DisableBody(BaseModel):
     password: str
 
 
-def _authenticated(request: Request) -> bool:
-    return auth.check(request.cookies.get(auth.COOKIE_NAME))
+class UserBody(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+
+
+def _session(request: Request) -> tuple[str, str] | None:
+    return auth.session_info(request.cookies.get(auth.COOKIE_NAME))
+
+
+def _login_response(username: str, password: str) -> JSONResponse:
+    token = auth.login(username, password)
+    resp = JSONResponse({"ok": True})
+    if token:
+        resp.set_cookie(
+            auth.COOKIE_NAME, token, httponly=True, samesite="lax",
+            max_age=auth.SESSION_TTL,
+        )
+    return resp
 
 
 @router.get("/status")
 def status(request: Request):
+    info = _session(request)
     return {
         "enabled": auth.enabled(),
-        "authenticated": (not auth.enabled()) or _authenticated(request),
-        "username": auth.auth_config().get("username", ""),
+        "authenticated": (not auth.enabled()) or info is not None,
+        "username": info[0] if info else "",
+        "role": info[1] if info else ("admin" if not auth.enabled() else ""),
     }
 
 
@@ -60,30 +79,63 @@ def logout(request: Request):
 
 @router.post("/setup")
 def setup(body: SetupBody, request: Request):
-    """Enable auth / change credentials. Once enabled, changing
-    credentials requires a valid session."""
-    if auth.enabled() and not _authenticated(request):
-        raise HTTPException(401, "authentication required")
+    """Enable auth with an admin account. Once enabled, only an admin
+    session may change credentials (enforced by the middleware)."""
     username = body.username.strip()
     if not username or len(body.password) < 4:
         raise HTTPException(400, "username required, password min 4 chars")
     auth.set_credentials(username, body.password)
-    token = auth.login(username, body.password)
-    resp = JSONResponse({"ok": True, "enabled": True})
-    resp.set_cookie(
-        auth.COOKIE_NAME, token, httponly=True, samesite="lax",
-        max_age=auth.SESSION_TTL,
-    )
-    return resp
+    return _login_response(username, body.password)
 
 
 @router.post("/disable")
 def disable(body: DisableBody):
-    cfg = auth.auth_config()
-    if not cfg.get("enabled"):
+    """Disable auth. Requires any admin's password; accounts are kept."""
+    if not auth.enabled():
         return {"ok": True, "enabled": False}
-    if not auth.verify_password(body.password, cfg.get("salt", ""),
-                                cfg.get("password_hash", "")):
+    admins = [u for u in auth.get_users() if u.get("role") == "admin"]
+    if not any(
+        auth.verify_password(body.password, u.get("salt", ""),
+                             u.get("password_hash", ""))
+        for u in admins
+    ):
         raise HTTPException(401, "invalid password")
     auth.disable()
     return {"ok": True, "enabled": False}
+
+
+# -------- user management (admin-only via middleware) --------
+
+
+@router.get("/users")
+def list_users():
+    return {"users": [
+        {"username": u["username"], "role": u.get("role", "admin")}
+        for u in auth.get_users()
+    ]}
+
+
+@router.post("/users")
+def create_user(body: UserBody):
+    username = body.username.strip()
+    if not username or len(body.password) < 4:
+        raise HTTPException(400, "username required, password min 4 chars")
+    try:
+        auth.add_user(username, body.password, body.role)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@router.delete("/users/{username}")
+def remove_user(username: str, request: Request):
+    info = _session(request)
+    if info and info[0] == username:
+        raise HTTPException(400, "cannot delete your own account")
+    try:
+        auth.delete_user(username)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}

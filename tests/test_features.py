@@ -254,15 +254,20 @@ def test_auth_full_flow(tmp_path, monkeypatch):
                        ).status_code == 200
     assert client.get("/api/library").status_code == 200
 
-    # logout locks it again
+    # logout locks it again — including the disable endpoint itself
     client.post("/api/auth/logout")
     assert client.get("/api/library").status_code == 401
+    assert client.post("/api/auth/disable",
+                       json={"password": "secret1"}).status_code == 401
 
-    # disable requires the password; afterwards everything is open
+    # disable requires an admin session AND the password
+    client.post("/api/auth/login",
+                json={"username": "admin", "password": "secret1"})
     assert client.post("/api/auth/disable",
                        json={"password": "wrong"}).status_code == 401
     assert client.post("/api/auth/disable",
                        json={"password": "secret1"}).status_code == 200
+    client.cookies.clear()
     assert client.get("/api/library").status_code == 200
 
 

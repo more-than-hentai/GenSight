@@ -33,11 +33,10 @@ class DirectoryBody(BaseModel):
 
 
 def public_settings() -> dict:
-    """Settings with auth secrets stripped — never leak salt/hash."""
+    """Settings with auth secrets stripped — never leak salts/hashes.
+    Account details live behind /api/auth/users (admin-only)."""
     s = config.load_settings()
-    a = s.get("auth", {})
-    s["auth"] = {"enabled": bool(a.get("enabled")),
-                 "username": a.get("username", "")}
+    s["auth"] = {"enabled": bool(s.get("auth", {}).get("enabled"))}
     return s
 
 

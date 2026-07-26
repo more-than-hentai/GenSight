@@ -360,11 +360,53 @@ async function renderAuth() {
   try { s = await api.get("/api/auth/status"); } catch { return; }
   $("#authDisabledBox").classList.toggle("hidden", s.enabled);
   $("#authEnabledBox").classList.toggle("hidden", !s.enabled);
-  if (s.enabled) {
-    $("#authInfo").textContent =
-      `${t("settings.authOn", "활성화됨")} — ${s.username}`;
+  if (!s.enabled) return;
+  $("#authInfo").textContent =
+    `${t("settings.authOn", "활성화됨")} — ${s.username} (${t("role." + s.role, s.role)})`;
+  renderUsers();
+}
+
+async function renderUsers() {
+  let data;
+  try { data = await api.get("/api/auth/users"); } catch { return; }
+  const box = $("#userList");
+  box.innerHTML = "";
+  for (const u of data.users) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "grow";
+    label.textContent =
+      `${u.role === "admin" ? "🛡" : "👤"} ${u.username} — ${t("role." + u.role, u.role)}`;
+    const del = document.createElement("button");
+    del.textContent = t("settings.remove", "삭제");
+    del.onclick = async () => {
+      if (!confirm(`${u.username}?`)) return;
+      try {
+        await api.send("DELETE", `/api/auth/users/${encodeURIComponent(u.username)}`);
+        renderUsers();
+      } catch (e) { toast(e.message, true); }
+    };
+    li.append(label, del);
+    box.appendChild(li);
   }
 }
+
+$("#addUser").onclick = async () => {
+  const username = $("#newUserName").value.trim();
+  const password = $("#newUserPass").value;
+  if (!username || password.length < 4) {
+    toast(t("auth.weak", "사용자명과 4자 이상 비밀번호가 필요합니다"), true);
+    return;
+  }
+  try {
+    await api.send("POST", "/api/auth/users", {
+      username, password, role: $("#newUserRole").value,
+    });
+    $("#newUserName").value = $("#newUserPass").value = "";
+    toast(t("toast.saved", "설정이 저장되었습니다"));
+    renderUsers();
+  } catch (e) { toast(e.message, true); }
+};
 
 $("#authEnable").onclick = async () => {
   const username = $("#authUser").value.trim();
@@ -396,11 +438,31 @@ $("#authDisable").onclick = async () => {
 async function checkLogin() {
   try {
     const s = await api.get("/api/auth/status");
+    state.role = s.enabled ? s.role : "admin";
     const need = s.enabled && !s.authenticated;
     $("#loginOverlay").classList.toggle("hidden", !need);
+    $("#logoutBtn").classList.toggle("hidden", !(s.enabled && s.authenticated));
+    if (!need) applyRole(state.role);
     return !need;
-  } catch { return true; }
+  } catch { state.role = "admin"; return true; }
 }
+
+function applyRole(role) {
+  const restricted = role === "user";
+  // Hide admin-only surfaces: settings tab, scanning, job list
+  $('[data-tab="settings"]').classList.toggle("hidden", restricted);
+  $("#scanCard").classList.toggle("hidden", restricted);
+  $("#jobsCard").classList.toggle("hidden", restricted);
+  if (restricted) {
+    const active = document.querySelector(".tab.active");
+    if (active && active.dataset.tab === "settings") activateTab("library");
+  }
+}
+
+$("#logoutBtn").onclick = async () => {
+  try { await api.send("POST", "/api/auth/logout"); } catch {}
+  location.reload();
+};
 
 $("#loginBtn").onclick = doLogin;
 $("#loginPass").addEventListener("keydown", (e) => {
@@ -462,7 +524,12 @@ $("#saveSettings").onclick = async () => {
 };
 
 $("#langSelect").onchange = async (e) => {
-  await api.send("PUT", "/api/settings", { language: e.target.value });
+  localStorage.setItem("gensight.lang", e.target.value);
+  if (state.role !== "user") {
+    try {
+      await api.send("PUT", "/api/settings", { language: e.target.value });
+    } catch { /* restricted role — local preference only */ }
+  }
   await loadLang(e.target.value);
 };
 
@@ -1334,15 +1401,18 @@ function activateTab(name) {
 (async function init() {
   const loggedIn = await checkLogin();
   try {
-    if (loggedIn) {
+    if (loggedIn && state.role !== "user") {
       await loadSettings();
       await loadLang(state.settings.language);
+    } else {
+      // Restricted users cannot read settings — use the local choice
+      await loadLang(localStorage.getItem("gensight.lang") || "ko");
     }
   } catch (e) {
     toast(`${t("toast.loadFailed", "불러오기 실패")}: ${e.message}`, true);
   }
   if (loggedIn) {
-    pollJobs();
+    if (state.role !== "user") pollJobs();
     // Deep links: /#library /#stats /#settings and ?detail=<path>
     const hashTab = location.hash.replace("#", "");
     if (["scan", "library", "stats", "settings"].includes(hashTab)) {
