@@ -73,7 +73,9 @@ watch sweep /imgs: 3 new/changed file(s) ingested (120 known, ...) in 0.4s
 | 썸네일이 회색으로 표시 | 손상된 이미지 파일 — 원본 확인 |
 | 이미지 포함 복사가 텍스트만 복사됨 | 클립보드 이미지 쓰기는 HTTPS 또는 localhost에서만 동작. `127.0.0.1`로 접속하세요 |
 | 서버 재시작 후 결과가 사라짐 | 스캔 결과는 현재 메모리에만 보관됩니다(로드맵: SQLite 영구 저장). 필요한 결과는 JSON/CSV로 내보내 두세요 |
-| GPU가 목록에 없음 | `nvidia-smi` 동작 확인. Docker라면 `nvidia-container-toolkit` + GPU 예약 설정 필요 |
+| GPU가 목록에 없음 | `nvidia-smi` 동작 확인. Docker라면 `nvidia-container-toolkit` 설치 **및 데몬 등록**(`nvidia-ctk runtime configure --runtime=docker` 후 재시작) 필요 |
+| `permission denied ... /var/run/docker.sock` | 사용자가 `docker` 그룹에 없음 — [설치 가이드](installation.md)의 "sudo 없이 실행" 참고 (그룹 변경은 재로그인 후 적용) |
+| `could not select device driver "nvidia"` | 툴킷이 데몬에 등록되지 않음. `docker info \| grep Runtimes`에 `nvidia`가 보여야 함 |
 
 ## 보안 주의사항
 
