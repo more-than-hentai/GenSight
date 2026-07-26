@@ -285,7 +285,9 @@ def _build():
         across the whole library."""
         if (err := require_auth()):
             return err
-        return _wrap(stats.collect(top=max(1, min(int(top or 30), 200))))
+        # Model/sampler names come from image metadata too, so this
+        # needs the same bounding as the other untrusted payloads.
+        return _wrap(_truncate(stats.collect(top=max(1, min(int(top or 30), 200)))))
 
     @mcp.tool()
     def find_similar_images(path: str, max_distance: int = 10, limit: int = 20):

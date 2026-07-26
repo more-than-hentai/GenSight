@@ -260,6 +260,21 @@ def test_duplicate_group_fan_out_is_bounded(tmp_path, monkeypatch):
     assert groups[0]["truncated"] == 3
 
 
+def test_prompt_stats_are_truncated(tmp_path, monkeypatch):
+    """Round 3: model/sampler names are image-derived too."""
+    t = _tools(tmp_path, monkeypatch)
+    huge_model = "M" * (mcp_server.MAX_TEXT_CHARS + 500)
+    p = _img(tmp_path / "imgs" / "s.png")
+    db.upsert_image({
+        "file": str(p), "filename": p.name, "tool": "a1111",
+        "prompt": "a cat", "negative_prompt": "",
+        "params": {"Model": huge_model}, "error": None,
+    })
+    models = t["get_prompt_stats"]()["data"]["models"]
+    assert any("truncated" in m["token"] for m in models)
+    assert all(len(m["token"]) < len(huge_model) for m in models)
+
+
 def test_untrusted_text_is_truncated(tmp_path, monkeypatch):
     t = _tools(tmp_path, monkeypatch)
     huge = "x" * (mcp_server.MAX_TEXT_CHARS + 500)
