@@ -67,12 +67,32 @@ body {
   font: 14px/1.5 -apple-system, "Segoe UI", "Noto Sans KR", "Noto Sans JP", sans-serif;
 }
 header {
-  display: flex; align-items: center; gap: 16px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
   padding: 10px 20px; background: var(--panel);
   border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10;
 }
-.brand { font-weight: 700; font-size: 17px; }
-nav { display: flex; gap: 4px; flex: 1; }
+.brand { font-weight: 700; font-size: 17px; flex-shrink: 0; }
+/* Tabs scroll horizontally instead of squeezing the account controls
+   off-screen — on a narrow viewport the unconstrained flex row used to
+   overflow the header, pushing logout/theme/language past the edge
+   with no visible way to reach them. */
+nav {
+  display: flex; gap: 4px; flex: 1; min-width: 0;
+  overflow-x: auto; scrollbar-width: thin;
+}
+.header-right {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  min-width: 0; justify-content: flex-end;
+}
+.user-chip {
+  color: var(--muted); font-size: 12.5px; white-space: nowrap;
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis;
+}
+#logoutBtn {
+  display: flex; align-items: center; gap: 5px; white-space: nowrap;
+  color: var(--muted);
+}
+#logoutBtn:hover { color: var(--err); border-color: var(--err); }
 .tab {
   background: none; border: none; color: var(--muted);
   padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 14px;

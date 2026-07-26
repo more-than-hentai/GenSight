@@ -46,10 +46,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "auto": False,
     },
     "auth": {
-        # Optional session auth; managed via /api/auth/*, never expose
-        # salt/password_hash through the settings API.
-        # users: [{username, salt, password_hash, role: admin|user}]
-        # (legacy username/salt/password_hash fields are migrated)
+        # Optional session auth; managed via /api/auth/*. Accounts
+        # (salts/hashes) live in the SQLite `users` table (see
+        # app/auth.py), not here — only the on/off toggle is a setting.
+        # users/username/salt/password_hash are legacy fields kept so an
+        # older settings.json still merges cleanly; auth.py migrates any
+        # accounts found there into the database on first access and
+        # then leaves them empty.
         "enabled": False,
         "users": [],
         "username": "",

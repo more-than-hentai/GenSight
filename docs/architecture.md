@@ -67,6 +67,37 @@ React가 아닌 Vue를 권장하는 이유: 템플릿 문법이 현재 HTML 구�
 - SQLite: 스레드별 연결, WAL 모드, busy_timeout 30s,
   초기화(스키마/WAL 전환)는 전역 락으로 직렬화
 
+## 계정 저장소
+
+로그인 계정(사용자명/salt/scrypt 해시/역할)은 **SQLite `users` 테이블**에
+저장됩니다 (`data/gensight.db`) — `settings.json`이 아닙니다. 인증
+on/off 토글만 `settings.json`의 `auth.enabled`에 남아 있습니다.
+
+이전에는 계정이 `settings.json`에 있었는데, JSON 파일의 읽기-수정-쓰기
+방식은 동시 요청 간 갱신 유실 위험이 있고, salt/해시가 지원 요청용으로
+공유될 수 있는 설정 파일에 노출되는 문제가 있었습니다. 계정 쓰기는 이제
+나머지 앱과 동일하게 SQLite 트랜잭션으로 처리되며, 특히:
+
+- **버전 증분**은 `INSERT ... ON CONFLICT DO UPDATE SET version = users.version + 1`
+  한 문장으로 SQLite가 직접 계산합니다 — Python에서 미리 읽어 계산한 값을
+  다시 쓰는 방식은 동시 쓰기 시 두 요청이 같은 "다음 버전"을 계산해
+  세션 무효화가 누락될 수 있었습니다.
+- **마지막 관리자 보호**는 `DELETE`/`UPSERT` 문 자체의 `WHERE` 절에 내장돼
+  있어, 두 관리자가 동시에 서로를 삭제/강등해도 SQLite의 쓰기 직렬화
+  덕분에 한쪽만 성공합니다 (`tests/test_users_db.py`의 스레드 기반
+  테스트로 검증).
+- 구버전 `settings.json` 계정은 최초 접근 시 **전량 원자적 트랜잭션**으로
+  DB에 이관되고(`db.import_legacy_users`), 성공 후에만 JSON 필드를
+  비웁니다 — 중간에 실패해도 일부만 이관되는 일이 없습니다.
+
+## UI 헤더 반응형 처리
+
+헤더는 `flex-wrap`을 써서 탭 내비게이션(`nav`, 넘치면 자체 스크롤)과
+계정 컨트롤(`.header-right`: 사용자 칩·로그아웃·테마·언어)이 좁은
+화면에서 각각 별도 줄로 접히도록 구성돼 있습니다. 이전에는 두 그룹이
+줄바꿈 없이 한 줄에 강제로 들어가 있어, 375px 폭 같은 좁은 화면에서
+로그아웃 버튼 등이 뷰포트 밖으로 밀려나 스크롤 없이는 닿을 수 없었습니다.
+
 ## 콘텐츠 등급 (후방주의)
 
 WD Tagger의 등급 헤드(카테고리 9: general/sensitive/questionable/explicit)를
