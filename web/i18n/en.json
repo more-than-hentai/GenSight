@@ -174,5 +174,9 @@
   "settings.presets": "Starter rules:",
   "settings.presetStandard": "Install standard categories",
   "settings.presetExample": "Install example groups",
-  "settings.presetInstalled": "Installed"
+  "settings.presetInstalled": "Installed",
+  "detail.arca": "Arcalive",
+  "toast.copiedArca": "Copied in Arcalive format",
+  "toast.copyFailed": "Copy failed",
+  "toast.copyBlocked": "the browser blocked clipboard access (needs window focus and localhost/HTTPS)"
 }

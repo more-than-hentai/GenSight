@@ -125,7 +125,7 @@ def test_audit_csv_export(tmp_path, monkeypatch):
     r = client.get("/api/audit/export")
     assert r.status_code == 200
     lines = r.text.strip().splitlines()
-    assert lines[0].startswith("ts,actor,action")
+    assert lines[0].startswith("ts,iso,actor,action")
     assert any("scan.start" in ln for ln in lines[1:])
 
 
@@ -214,3 +214,115 @@ def test_presets_are_idempotent(tmp_path, monkeypatch):
     first = len(db.list_groups())
     client.post("/api/groups/install-preset?preset=standard")
     assert len(db.list_groups()) == first, "re-install duplicated rules"
+
+
+# ------------------------------------------------- audit hardening (round 2)
+
+
+def test_csv_export_neutralises_formula_injection(tmp_path, monkeypatch):
+    """A failed login can supply any username; Excel must not evaluate it."""
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/auth/setup", json={"username": "boss", "password": "root1"})
+    client.post("/api/auth/login",
+                json={"username": "=cmd|'/c calc'!A1", "password": "x"})
+    r = client.get("/api/audit/export")
+    client.post("/api/auth/disable", json={"password": "root1"})
+
+    assert r.status_code == 200
+    body = r.text
+    assert "'=cmd" in body, "formula not neutralised"
+    for line in body.splitlines()[1:]:
+        for cell in line.split(","):
+            bare = cell.strip('"')
+            assert not bare.startswith(("=", "+", "@")), cell
+
+
+def test_csv_export_is_not_truncated(tmp_path, monkeypatch):
+    """Export must stream everything, not stop at one page."""
+    client = _client(tmp_path, monkeypatch)
+    for i in range(1200):
+        audit.record("bulk.event", actor="boss", target=str(i))
+    r = client.get("/api/audit/export", params={"action": "bulk"})
+    rows = [ln for ln in r.text.strip().splitlines() if "bulk.event" in ln]
+    assert len(rows) == 1200, f"exported only {len(rows)} of 1200"
+
+
+def test_audit_fields_are_length_capped(tmp_path, monkeypatch):
+    _use_tmp_data(tmp_path, monkeypatch)
+    audit.record("huge.event", actor="A" * 5000, target="B" * 5000,
+                 detail={"blob": "C" * 20000})
+    _total, items = audit.query()
+    row = items[0]
+    assert len(row["actor"]) <= audit.MAX_FIELD_CHARS + 1
+    assert len(row["target"]) <= audit.MAX_FIELD_CHARS + 1
+    assert len(str(row["detail"])) <= audit.MAX_DETAIL_CHARS + 10
+
+
+def test_iter_all_pages_through_everything(tmp_path, monkeypatch):
+    _use_tmp_data(tmp_path, monkeypatch)
+    for i in range(250):
+        audit.record("page.event", target=str(i))
+    seen = [r["target"] for r in audit.iter_all(action="page", chunk=40)]
+    assert len(seen) == 250
+    assert len(set(seen)) == 250, "iter_all repeated or skipped rows"
+
+
+def test_log_messages_cannot_forge_lines(tmp_path, monkeypatch):
+    """A filename may contain a newline on Linux; the persistent log
+    must not gain a forged entry from it."""
+    import logging
+
+    from app import logging_config
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    logging_config.setup()
+    log_path = (tmp_path / "data" / logging_config.LOG_FILE)
+
+    logging.getLogger("gensight.test").info(
+        "scan of %s", "evil\nFAKE INFO forged entry")
+    for h in logging.getLogger("gensight").handlers:
+        h.flush()
+    text = log_path.read_text(encoding="utf-8")
+    assert "\\n" in text
+    assert not any(ln.startswith("FAKE INFO") for ln in text.splitlines())
+
+
+def test_logging_setup_does_not_duplicate_handlers(tmp_path, monkeypatch):
+    import logging
+
+    from app import logging_config
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    logging_config.setup()
+    before = len(logging.getLogger("gensight").handlers)
+    logging_config.setup()
+    logging_config.setup()
+    assert len(logging.getLogger("gensight").handlers) == before
+
+
+def test_worker_status_snapshot_is_race_free(tmp_path, monkeypatch):
+    """concurrency() used to iterate the live jobs dict."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    import threading
+
+    from app.scanner import manager
+
+    stop = threading.Event()
+    errors = []
+
+    def churn():
+        while not stop.is_set():
+            job = manager.submit(str(tmp_path), False, 1)
+            manager.delete(job.id)
+
+    def read():
+        try:
+            for _ in range(300):
+                manager.concurrency()
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    t1 = threading.Thread(target=churn, daemon=True)
+    t2 = threading.Thread(target=read)
+    t1.start(); t2.start(); t2.join(); stop.set(); t1.join(timeout=5)
+    assert not errors, f"concurrency() raced: {errors[0]}"

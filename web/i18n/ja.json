@@ -174,5 +174,9 @@
   "settings.presets": "スタータールール:",
   "settings.presetStandard": "標準カテゴリを追加",
   "settings.presetExample": "サンプルグループを追加",
-  "settings.presetInstalled": "追加済み"
+  "settings.presetInstalled": "追加済み",
+  "detail.arca": "アルカライブ",
+  "toast.copiedArca": "アルカライブ形式でコピーしました",
+  "toast.copyFailed": "コピー失敗",
+  "toast.copyBlocked": "ブラウザがクリップボードへのアクセスを拒否しました（ウィンドウのフォーカスと localhost/HTTPS が必要）"
 }

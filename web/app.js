@@ -1328,15 +1328,41 @@ document.addEventListener("keydown", (e) => {
 $$("[data-copy]").forEach((b) => {
   b.onclick = async () => {
     if (!state.detail) return;
-    const text = formatResult(state.detail, b.dataset.copy);
-    renderModalMeta(b.dataset.copy);
-    if ($("#copyWithImage").checked) {
+    const fmt = b.dataset.copy;
+    const text = formatResult(state.detail, fmt);
+    renderModalMeta(fmt);
+    const withImage = $("#copyWithImage").checked;
+    if (fmt === "arca") {
+      await copyArca(state.detail, text, withImage);
+    } else if (withImage) {
       await copyWithImage(state.detail, text);
     } else {
       copyText(text);
     }
   };
 });
+
+async function copyArca(r, text, withImage) {
+  let dataUrl = null;
+  if (withImage) {
+    try {
+      dataUrl = (await fetchImageDataUrl(r)).dataUrl;
+    } catch { /* fall through: metadata still copies */ }
+  }
+  const html = arcaHtml(r, dataUrl);
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": new Blob([html], { type: "text/html" }),
+        "text/plain": new Blob([text], { type: "text/plain" }),
+      }),
+    ]);
+    toast(t("toast.copiedArca", "아카라이브 형식으로 복사되었습니다"));
+  } catch {
+    // Clipboard HTML needs a secure context (localhost/HTTPS).
+    copyText(text);
+  }
+}
 
 $("#viewTable").onclick = () => {
   state.viewTable = !state.viewTable;
@@ -1379,6 +1405,38 @@ function highlightReadable(text) {
     }
     return line;
   }).join("\n");
+}
+
+/* Arcalive's post editor is a WYSIWYG that pastes text/html, so this
+   builds self-contained markup: no classes, no external CSS, inline
+   styles only, and a <table> the editor keeps intact. */
+function arcaHtml(r, imageDataUrl) {
+  const prompt = normalizeText(r.prompt);
+  const negative = normalizeText(r.negative_prompt);
+  const box = "border:1px solid #d0d0d0;background:#fafafa;padding:8px;" +
+    "white-space:pre-wrap;word-break:break-word;font-family:monospace;" +
+    "font-size:13px;";
+  let html = "<div>";
+  if (imageDataUrl) {
+    html += `<p><img src="${imageDataUrl}" alt="${escapeHtml(r.filename)}"></p>`;
+  }
+  html += `<p><b>Prompt</b></p><div style="${box}">${escapeHtml(prompt || "—")}</div>`;
+  if (negative) {
+    html += `<p><b>Negative prompt</b></p>` +
+      `<div style="${box}">${escapeHtml(negative)}</div>`;
+  }
+  const params = orderedParams(r);
+  if (Object.keys(params).length) {
+    html += '<p><b>Settings</b></p>' +
+      '<table style="border-collapse:collapse;font-size:13px;">';
+    const cell = "border:1px solid #d0d0d0;padding:3px 8px;";
+    for (const [k, v] of Object.entries(params)) {
+      html += `<tr><td style="${cell}background:#f0f0f0;"><b>${escapeHtml(k)}</b></td>` +
+        `<td style="${cell}">${escapeHtml(String(v))}</td></tr>`;
+    }
+    html += "</table>";
+  }
+  return html + "</div>";
 }
 
 function metaTableHtml(r) {
@@ -1429,22 +1487,20 @@ async function fetchDataUrl(url) {
   return { dataUrl, size: blob.size };
 }
 
+/** Original if it is small enough to embed, thumbnail otherwise. */
+async function fetchImageDataUrl(r) {
+  try {
+    const img = await fetchDataUrl(
+      `/api/image?path=${encodeURIComponent(r.file)}`);
+    if (img.size <= MAX_COPY_ORIGINAL_BYTES) return img;
+  } catch { /* fall through to the thumbnail */ }
+  return fetchDataUrl(
+    `/api/image?path=${encodeURIComponent(r.file)}&thumb=true`);
+}
+
 async function copyWithImage(r, text) {
   try {
-    // Prefer the original file; fall back to the thumbnail when the
-    // original is too large to embed as a data URL.
-    let img;
-    try {
-      img = await fetchDataUrl(`/api/image?path=${encodeURIComponent(r.file)}`);
-      if (img.size > MAX_COPY_ORIGINAL_BYTES) img = null;
-    } catch {
-      img = null;
-    }
-    if (!img) {
-      img = await fetchDataUrl(
-        `/api/image?path=${encodeURIComponent(r.file)}&thumb=true`
-      );
-    }
+    const img = await fetchImageDataUrl(r);
     const html =
       `<div><img src="${img.dataUrl}" alt="${escapeHtml(r.filename)}"><br>` +
       `<pre>${escapeHtml(text)}</pre></div>`;
@@ -1504,6 +1560,14 @@ function formatResult(r, fmt) {
     for (const [k, v] of Object.entries(params)) s += `| ${k} | ${v} |\n`;
     return s;
   }
+  if (fmt === "arca") {
+    // Plain-text fallback; the HTML flavour is what the editor uses.
+    let s = `${prompt}\n`;
+    if (negative) s += `\n[Negative] ${negative}\n`;
+    s += "\n";
+    for (const [k, v] of Object.entries(params)) s += `${k}: ${v}\n`;
+    return s;
+  }
   if (fmt === "bbcode") {
     let s = `[b]Prompt[/b]\n[code]${r.prompt}[/code]\n`;
     if (r.negative_prompt) s += `[b]Negative prompt[/b]\n[code]${r.negative_prompt}[/code]\n`;
@@ -1518,7 +1582,15 @@ function formatResult(r, fmt) {
 function copyText(text) {
   navigator.clipboard.writeText(text)
     .then(() => toast(t("toast.copied", "클립보드에 복사되었습니다")))
-    .catch(() => toast("copy failed", true));
+    .catch((e) => {
+      // The clipboard API needs a focused document and a secure context
+      // (localhost or HTTPS) — say which, instead of "copy failed".
+      const why = e && e.name === "NotAllowedError"
+        ? t("toast.copyBlocked",
+            "브라우저가 클립보드 접근을 막았습니다 (창 포커스 및 localhost/HTTPS 필요)")
+        : (e && e.message) || "";
+      toast(`${t("toast.copyFailed", "복사 실패")}${why ? ": " + why : ""}`, true);
+    });
 }
 
 function toast(msg, isErr) {
