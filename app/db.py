@@ -113,6 +113,19 @@ _SORT_KEYS = {
 }
 
 
+# Hard ceiling for any single query. Exports intentionally ask for a
+# very large page; anything above this is a bug or an abusive caller.
+MAX_QUERY_LIMIT = 1_000_000
+
+
+def _clamp(value, low: int, high: int) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return low
+    return max(low, min(high, n))
+
+
 def _order_clause(sort: str) -> str:
     parts = [_SORT_KEYS[s.strip()] for s in (sort or "").split(",")
              if s.strip() in _SORT_KEYS]
@@ -304,6 +317,11 @@ def query_images(
         args.append(group)
     w = ("WHERE " + " AND ".join(where)) if where else ""
     order = _order_clause(sort)
+    # SQLite treats a negative LIMIT as "no limit", so a caller passing
+    # -1 would stream the whole table. Clamp here rather than trusting
+    # each caller (web API and MCP both reach this).
+    limit = _clamp(limit, 1, MAX_QUERY_LIMIT)
+    offset = max(0, int(offset or 0))
     conn = connect()
     total = conn.execute(f"SELECT COUNT(*) c FROM images {w}", args).fetchone()["c"]
     rows = conn.execute(
@@ -364,6 +382,8 @@ def untagged_paths(limit: int | None = None) -> list[str]:
 
 
 def similar_images(path: str, max_distance: int = 10, limit: int = 50) -> list[dict]:
+    max_distance = _clamp(max_distance, 0, 64)
+    limit = _clamp(limit, 1, 1000)
     target = get_image(path)
     if not target or not target.get("phash"):
         return []
@@ -386,6 +406,7 @@ def duplicate_groups(limit: int = 100) -> list[dict]:
 
     The all-zero hash is excluded: every flat/gradient image collapses
     to it, which would lump unrelated solid-color images together."""
+    limit = _clamp(limit, 1, 1000)
     conn = connect()
     hashes = conn.execute(
         """SELECT phash, COUNT(*) c FROM images
