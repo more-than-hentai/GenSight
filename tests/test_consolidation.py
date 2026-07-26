@@ -110,7 +110,7 @@ def test_mcp_auth_gate(tmp_path, monkeypatch):
     _use_tmp_data(tmp_path, monkeypatch)
     from app import auth, mcp_server
 
-    monkeypatch.setattr(mcp_server, "_unlocked", False)
+    monkeypatch.setattr(mcp_server, "_unlocked", None)
     monkeypatch.delenv("GENSIGHT_MCP_PASSWORD", raising=False)
 
     # Auth disabled -> open
@@ -125,18 +125,18 @@ def test_mcp_auth_gate(tmp_path, monkeypatch):
         assert mcp_server.require_auth() is None
     finally:
         auth.disable()
-        monkeypatch.setattr(mcp_server, "_unlocked", False)
+        monkeypatch.setattr(mcp_server, "_unlocked", None)
 
 
 def test_mcp_auth_env_password(tmp_path, monkeypatch):
     _use_tmp_data(tmp_path, monkeypatch)
     from app import auth, mcp_server
 
-    monkeypatch.setattr(mcp_server, "_unlocked", False)
+    monkeypatch.setattr(mcp_server, "_unlocked", None)
     auth.set_credentials("admin", "secret2")
     try:
         monkeypatch.setenv("GENSIGHT_MCP_PASSWORD", "secret2")
         assert mcp_server.require_auth() is None
     finally:
         auth.disable()
-        monkeypatch.setattr(mcp_server, "_unlocked", False)
+        monkeypatch.setattr(mcp_server, "_unlocked", None)
