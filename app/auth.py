@@ -29,8 +29,8 @@ SESSION_TTL = 7 * 24 * 3600
 
 ROLES = ("admin", "user")
 
-# token -> (username, role, expiry)
-_sessions: dict[str, tuple[str, str, float]] = {}
+# token -> (username, role, credential version, expiry)
+_sessions: dict[str, tuple[str, str, int, float]] = {}
 _lock = threading.Lock()
 
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
@@ -91,14 +91,38 @@ def find_user(username: str) -> dict | None:
     return None
 
 
+def revoke_sessions(username: str) -> int:
+    """Drop every live session for a user. Called whenever an account
+    changes, so a password reset or a demotion takes effect at once
+    instead of leaving the old role usable for the session TTL."""
+    with _lock:
+        stale = [tok for tok, (name, _r, _v, _e) in _sessions.items()
+                 if name == username]
+        for tok in stale:
+            _sessions.pop(tok, None)
+    return len(stale)
+
+
+def cred_version(username: str) -> int:
+    user = find_user(username)
+    return int(user.get("version", 0)) if user else -1
+
+
 def add_user(username: str, password: str, role: str = "user") -> None:
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}")
     salt, digest = hash_password(password)
+    previous = find_user(username)
+    version = int((previous or {}).get("version", 0)) + 1
     users = [u for u in get_users() if u["username"] != username]
     users.append({"username": username, "salt": salt,
-                  "password_hash": digest, "role": role})
+                  "password_hash": digest, "role": role, "version": version})
     _save_users(users)
+    # Replacing an account (password reset / role change) must not leave
+    # the previous role alive in an existing cookie. The version bump
+    # also invalidates a session minted by a login that raced this
+    # update: session_info rejects any token whose version is stale.
+    revoke_sessions(username)
 
 
 def delete_user(username: str) -> None:
@@ -109,10 +133,7 @@ def delete_user(username: str) -> None:
     if not any(u.get("role") == "admin" for u in remaining):
         raise ValueError("cannot delete the last admin account")
     _save_users(remaining)
-    with _lock:
-        for token, (name, _role, _exp) in list(_sessions.items()):
-            if name == username:
-                _sessions.pop(token, None)
+    revoke_sessions(username)
 
 
 def authenticate(username: str, password: str) -> str | None:
@@ -126,6 +147,18 @@ def authenticate(username: str, password: str) -> str | None:
                            user.get("password_hash", "")):
         return None
     return user.get("role", "admin")
+
+
+def _account_snapshot(username: str, password: str) -> tuple[str, int] | None:
+    """(role, version) captured from the record the password matched."""
+    user = find_user(username)
+    if user is None:
+        hash_password(password, secrets.token_hex(16))
+        return None
+    if not verify_password(password, user.get("salt", ""),
+                           user.get("password_hash", "")):
+        return None
+    return user.get("role", "admin"), int(user.get("version", 0))
 
 
 def set_credentials(username: str, password: str) -> None:
@@ -147,12 +180,13 @@ def disable() -> None:
 def login(username: str, password: str) -> str | None:
     if not enabled():
         return None
-    role = authenticate(username, password)
-    if role is None:
+    snapshot = _account_snapshot(username, password)
+    if snapshot is None:
         return None
+    role, version = snapshot
     token = secrets.token_urlsafe(32)
     with _lock:
-        _sessions[token] = (username, role, time.time() + SESSION_TTL)
+        _sessions[token] = (username, role, version, time.time() + SESSION_TTL)
     return token
 
 
@@ -163,17 +197,27 @@ def logout(token: str | None) -> None:
 
 
 def session_info(token: str | None) -> tuple[str, str] | None:
-    """(username, role) for a valid session, else None."""
+    """(username, role) for a valid session, else None.
+
+    A session is only valid while it matches the account's current
+    credential version, so any account change (including one that raced
+    the login that minted this token) invalidates it.
+    """
     if not token:
         return None
     with _lock:
         entry = _sessions.get(token)
         if not entry:
             return None
-        if entry[2] < time.time():
+        username, role, version, expiry = entry
+        if expiry < time.time():
             _sessions.pop(token, None)
             return None
-    return entry[0], entry[1]
+    if version != cred_version(username):
+        with _lock:
+            _sessions.pop(token, None)
+        return None
+    return username, role
 
 
 def check(token: str | None) -> bool:

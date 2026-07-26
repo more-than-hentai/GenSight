@@ -5,10 +5,14 @@ library (/api/library with a `directory` filter, /api/library/export);
 jobs remain for progress tracking and cancellation."""
 from __future__ import annotations
 
+import threading
+import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, Request, UploadFile
+from PIL import Image
 from pydantic import BaseModel
 
 from .. import config, metadata
@@ -17,6 +21,75 @@ from ..scanner import manager, process_and_store
 router = APIRouter(prefix="/api", tags=["scan"])
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+UPLOAD_CHUNK = 1024 * 1024
+# Uploads are writable by restricted accounts, so cap how fast one
+# identity can turn requests into permanent files on disk.
+UPLOAD_RATE_LIMIT = 60
+UPLOAD_RATE_WINDOW = 600  # seconds
+# Durable ceiling on the upload folder — the rate limit alone only
+# bounds requests per window, not lifetime disk use.
+UPLOAD_DIR_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
+# Decompression-bomb guard for untrusted uploads. metadata.py lifts
+# Pillow's global limit for trusted local scans, so uploads need their
+# own explicit bound.
+MAX_UPLOAD_PIXELS = 80_000_000
+
+_rate_lock = threading.Lock()
+_upload_hits: dict[str, deque] = defaultdict(deque)
+
+
+def _rate_limit(identity: str) -> None:
+    now = time.time()
+    with _rate_lock:
+        hits = _upload_hits[identity]
+        while hits and hits[0] < now - UPLOAD_RATE_WINDOW:
+            hits.popleft()
+        if len(hits) >= UPLOAD_RATE_LIMIT:
+            retry = int(hits[0] + UPLOAD_RATE_WINDOW - now) + 1
+            raise HTTPException(
+                429, f"too many uploads, retry in {retry}s",
+                headers={"Retry-After": str(retry)},
+            )
+        hits.append(now)
+
+
+def _upload_dir_bytes() -> int:
+    try:
+        return sum(f.stat().st_size for f in config.UPLOAD_DIR.glob("*")
+                   if f.is_file())
+    except OSError:
+        return 0
+
+
+def _verify_image(path: Path) -> None:
+    """Prove the bytes are a real, sanely sized image.
+
+    verify() only checks container structure, so a valid header with a
+    junk payload would pass; load() forces a full decode. Dimensions are
+    bounded first so a decompression bomb is rejected before allocation.
+    """
+    try:
+        with Image.open(path) as probe:
+            width, height = probe.size
+            if width * height > MAX_UPLOAD_PIXELS:
+                raise HTTPException(
+                    413, f"image too large: {width}x{height} pixels")
+            probe.verify()
+        # verify() leaves the file object unusable — reopen to decode.
+        with Image.open(path) as decoded:
+            decoded.load()
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 - not a decodable image
+        raise HTTPException(415, "file is not a readable image")
+
+
+def _check_quota() -> None:
+    if _upload_dir_bytes() >= UPLOAD_DIR_QUOTA_BYTES:
+        raise HTTPException(
+            507, "upload storage quota exhausted; ask an admin to clear "
+                 "data/uploads",
+        )
 
 
 class ScanBody(BaseModel):
@@ -46,21 +119,43 @@ def start_scan(body: ScanBody):
 
 
 @router.post("/analyze")
-async def analyze_upload(file: UploadFile):
-    """Analyze a single uploaded image (drag & drop / click upload)."""
+async def analyze_upload(request: Request, file: UploadFile):
+    """Analyze a single uploaded image (drag & drop / click upload).
+
+    The upload is streamed to a temp file, decoded to prove it really is
+    an image, and only then kept — an extension alone must not be enough
+    to park arbitrary bytes in the data directory.
+    """
+    _rate_limit(
+        getattr(request.state, "auth_user", "")
+        or (request.client.host if request.client else "anonymous")
+    )
+
     suffix = Path(file.filename or "upload").suffix.lower()
     if suffix not in metadata.SUPPORTED_EXTENSIONS:
         raise HTTPException(415, f"unsupported file type: {suffix or '(none)'}")
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "empty file")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "file too large (max 100 MB)")
 
     config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _check_quota()
     safe_name = Path(file.filename or "upload").name
     dest = config.UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
-    dest.write_bytes(data)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+
+    written = 0
+    try:
+        with tmp.open("wb") as out:
+            while chunk := await file.read(UPLOAD_CHUNK):
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "file too large (max 100 MB)")
+                out.write(chunk)
+        if not written:
+            raise HTTPException(400, "empty file")
+        _verify_image(tmp)
+        tmp.replace(dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
     # Persist into the library like scanned files (searchable, has
     # phash for similarity, shows up with rating/favorite controls)

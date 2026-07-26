@@ -225,6 +225,20 @@ def has_image(path: str) -> bool:
     return row is not None
 
 
+def is_decoded_image(path: str) -> bool:
+    """True only if the file was indexed AND actually decoded as an
+    image during extraction (error IS NULL).
+
+    A file merely *named* like an image (secrets.env.png) still gets a
+    library row so scan counts stay honest, but it must never be served
+    to a restricted account.
+    """
+    row = connect().execute(
+        "SELECT 1 FROM images WHERE path=? AND error IS NULL", (path,)
+    ).fetchone()
+    return row is not None
+
+
 def get_image(path: str) -> dict | None:
     row = connect().execute(
         "SELECT * FROM images WHERE path=?", (path,)

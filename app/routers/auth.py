@@ -116,14 +116,25 @@ def list_users():
 
 
 @router.post("/users")
-def create_user(body: UserBody):
+def create_user(body: UserBody, request: Request):
     username = body.username.strip()
     if not username or len(body.password) < 4:
         raise HTTPException(400, "username required, password min 4 chars")
+    existing = auth.find_user(username)
+    if existing and existing.get("role") == "admin" and body.role != "admin":
+        admins = [u for u in auth.get_users() if u.get("role") == "admin"]
+        if len(admins) == 1:
+            raise HTTPException(400, "cannot demote the last admin account")
+    # Read the caller's identity before add_user revokes their session.
+    caller = _session(request)
     try:
         auth.add_user(username, body.password, body.role)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # Re-issue a cookie when an admin just changed their own credentials
+    # so the revocation does not sign them out mid-session.
+    if caller and caller[0] == username:
+        return _login_response(username, body.password)
     return {"ok": True}
 
 

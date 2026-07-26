@@ -68,13 +68,21 @@ async def auth_middleware(request: Request, call_next):
     """When auth is enabled: every /api route needs a valid session
     (except the public auth/i18n endpoints), and non-admin sessions are
     limited to the read/analyze surface. Static assets stay public so
-    the login screen can render."""
+    the login screen can render.
+
+    Also publishes the effective role on request.state so endpoints
+    that take a path (media) can tighten their own checks."""
+    # Auth off = single-operator localhost mode: treat as admin.
+    request.state.auth_role = "admin"
+    request.state.auth_user = ""
     if auth.enabled():
         path = request.url.path
+        info = auth.session_info(request.cookies.get(auth.COOKIE_NAME))
+        request.state.auth_role = info[1] if info else None
+        request.state.auth_user = info[0] if info else ""
         if path.startswith("/api") and not any(
             path.startswith(p) for p in PUBLIC_PREFIXES
         ):
-            info = auth.session_info(request.cookies.get(auth.COOKIE_NAME))
             if info is None:
                 return JSONResponse(
                     status_code=401,
