@@ -74,6 +74,28 @@ GPU를 쓰려면 서버를 `./run.sh start`로 기동하세요. 설정 → WD Ta
 docker compose up --build -d
 ```
 
+### sudo 없이 실행 (일반 사용자)
+
+Docker 소켓은 기본적으로 `root:docker` 소유라 일반 사용자는 `sudo`가 필요합니다.
+사용자를 `docker` 그룹에 넣으면 sudo 없이 쓸 수 있습니다:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+**그룹 변경은 새 로그인 세션부터 적용됩니다.** 현재 셸에서 바로 확인하려면:
+
+```bash
+newgrp docker        # 또는 로그아웃 후 재로그인
+docker ps            # sudo 없이 동작하면 완료
+```
+
+> ⚠️ **`docker` 그룹은 사실상 root 권한과 동등합니다.** 그룹 구성원은
+> 호스트 파일시스템을 컨테이너에 마운트해 root로 접근할 수 있습니다.
+> 신뢰하는 계정에만 부여하세요. 이를 피하려면 [Docker rootless 모드](
+> https://docs.docker.com/engine/security/rootless/)를 사용하는 방법도
+> 있습니다.
+
 이미지 디렉토리는 `docker-compose.yml`에 read-only로 마운트합니다:
 
 ```yaml
