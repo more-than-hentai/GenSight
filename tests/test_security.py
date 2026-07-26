@@ -115,6 +115,63 @@ def test_non_image_extension_blocked_even_for_admin(tmp_path, monkeypatch):
     assert "PRIVATE KEY" not in r.text
 
 
+def test_secret_with_image_extension_not_served(tmp_path, monkeypatch):
+    """Round 2: a secret named like an image gets indexed (so scan
+    counts stay honest) but must never be served — it never decoded."""
+    client = _client(tmp_path, monkeypatch)
+    imgdir = tmp_path / "imgs"
+    _seed_library(client, imgdir)
+    evil = imgdir / "secrets.env.png"
+    evil.write_text("OPENAI_API_KEY=sk-leak-via-name\n")
+    client.post("/api/scan", json={"directory": str(imgdir)})
+    import time
+    for _ in range(50):
+        if client.get("/api/library").json()["total"] >= 2:
+            break
+        time.sleep(0.1)
+
+    client.post("/api/auth/setup", json={"username": "boss", "password": "root1"})
+    client.post("/api/auth/users",
+                json={"username": "guest", "password": "pass1", "role": "user"})
+    client.cookies.clear()
+    client.post("/api/auth/login", json={"username": "guest", "password": "pass1"})
+
+    r = client.get("/api/image", params={"path": str(evil)})
+    assert r.status_code == 403
+    assert "sk-leak-via-name" not in r.text
+
+
+def test_symlink_to_secret_is_refused(tmp_path, monkeypatch):
+    """Round 2: serving opens with O_NOFOLLOW, so an indexed name that
+    became a symlink cannot be used to read the target."""
+    client = _client(tmp_path, monkeypatch)
+    imgdir = tmp_path / "imgs"
+    _seed_library(client, imgdir)
+    secret = tmp_path / "outside_secret.txt"
+    secret.write_text("TOP SECRET")
+
+    indexed = imgdir / "indexed.png"
+    swapped = imgdir / "swapped.png"
+    swapped.write_bytes(_png_bytes("swap me"))
+    client.post("/api/scan", json={"directory": str(imgdir)})
+    import time
+    for _ in range(50):
+        if client.get("/api/library").json()["total"] >= 2:
+            break
+        time.sleep(0.1)
+
+    # after indexing, replace the file with a symlink to the secret
+    swapped.unlink()
+    swapped.symlink_to(secret)
+
+    r = client.get("/api/image", params={"path": str(swapped)})
+    assert r.status_code in (403, 404), r.status_code
+    assert "TOP SECRET" not in r.text
+    # the untouched image still serves
+    assert client.get("/api/image",
+                      params={"path": str(indexed)}).status_code == 200
+
+
 # ------------------------------------------------- 2. session revocation
 
 
@@ -175,6 +232,30 @@ def test_cannot_demote_last_admin(tmp_path, monkeypatch):
     assert auth.find_user("boss")["role"] == "admin"
 
 
+def test_session_from_racing_login_is_rejected(tmp_path, monkeypatch):
+    """Round 2: a login that verified the OLD record but inserts its
+    session after revoke_sessions() must still be invalid."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    auth.set_credentials("boss", "root1")
+    auth.add_user("mole", "pass1", "admin")
+
+    # Simulate the race: capture the pre-change snapshot, mutate the
+    # account, then insert the session the racing login would have made.
+    snapshot = auth._account_snapshot("mole", "pass1")
+    assert snapshot == ("admin", 1)
+    auth.add_user("mole", "pass2", "user")  # concurrent demotion
+
+    import secrets as _secrets
+    import time as _time
+    token = _secrets.token_urlsafe(16)
+    with auth._lock:
+        auth._sessions[token] = ("mole", snapshot[0], snapshot[1],
+                                 _time.time() + auth.SESSION_TTL)
+
+    assert auth.session_info(token) is None, "stale-version session accepted"
+    auth.disable()
+
+
 # ------------------------------------------------- 3. upload hardening
 
 
@@ -201,6 +282,43 @@ def test_analyze_accepts_real_image(tmp_path, monkeypatch):
                     files={"file": ("ok.png", _png_bytes("upload ok"), "image/png")})
     assert r.status_code == 200
     assert r.json()["prompt"] == "upload ok"
+
+
+def test_analyze_rejects_valid_header_with_junk_payload(tmp_path, monkeypatch):
+    """Round 2: verify() alone passes a truncated/corrupt payload; the
+    full decode must reject it."""
+    client = _client(tmp_path, monkeypatch)
+    good = _png_bytes("truncate me")
+    truncated = good[: len(good) // 2]  # header intact, pixel data cut
+    r = client.post("/api/analyze",
+                    files={"file": ("t.png", truncated, "image/png")})
+    assert r.status_code == 415
+    updir = tmp_path / "data" / "uploads"
+    assert not (list(updir.glob("*")) if updir.exists() else [])
+
+
+def test_analyze_rejects_decompression_bomb(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    from app.routers import scan as scan_router
+
+    monkeypatch.setattr(scan_router, "MAX_UPLOAD_PIXELS", 1000)
+    r = client.post("/api/analyze",
+                    files={"file": ("big.png", _png_bytes(), "image/png")})
+    assert r.status_code == 413
+
+
+def test_analyze_enforces_storage_quota(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    from app.routers import scan as scan_router
+
+    payload = _png_bytes("quota")
+    assert client.post("/api/analyze",
+                       files={"file": ("q1.png", payload, "image/png")}
+                       ).status_code == 200
+    monkeypatch.setattr(scan_router, "UPLOAD_DIR_QUOTA_BYTES", 1)
+    r = client.post("/api/analyze",
+                    files={"file": ("q2.png", payload, "image/png")})
+    assert r.status_code == 507
 
 
 def test_analyze_rate_limited(tmp_path, monkeypatch):
