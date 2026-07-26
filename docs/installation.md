@@ -47,6 +47,27 @@ HOST=0.0.0.0 PORT=9000 ./run.sh
 > ⚠️ `0.0.0.0` 바인딩은 같은 네트워크의 다른 기기에서 접근을 허용합니다.
 > GenSight는 인증 기능이 없으므로 신뢰할 수 있는 네트워크에서만 사용하세요.
 
+## WD Tagger (자동 태깅 + 콘텐츠 등급) — 선택 설치
+
+태그와 PG/PG-13/R/X 등급은 WD Tagger가 채웁니다. 기본 설치에는 포함되지
+않으므로 필요할 때만 추가하세요.
+
+```bash
+.venv/bin/pip install -r requirements-ml.txt
+```
+
+CUDA 런타임은 pip으로 함께 설치되므로 **시스템 CUDA 툴킷은 필요 없습니다**.
+`./run.sh`가 해당 라이브러리를 `LD_LIBRARY_PATH`에 넣어주므로,
+GPU를 쓰려면 서버를 `./run.sh start`로 기동하세요. 설정 → WD Tagger의
+상태 표시에 `GPU` 또는 `CPU`가 나옵니다.
+
+> `onnxruntime-gpu`는 CUDA 12 계열(<1.23)로 고정돼 있습니다. 1.23 이상은
+> `libcudart.so.13`을 요구해서, 드라이버가 CUDA 13을 보고해도 CUDA 13
+> 런타임이 없으면 import 자체가 실패합니다.
+>
+> CPU 전용 호스트라면 `requirements-ml.txt`의 `onnxruntime-gpu`와 세 개의
+> `nvidia-*` 줄을 `onnxruntime>=1.19` 하나로 바꾸면 됩니다.
+
 ## Docker 설치
 
 ```bash
@@ -64,8 +85,19 @@ docker compose up --build -d
 이후 웹 UI 설정에서 **컨테이너 내부 경로**(`/images/ai-images`)를 등록하거나,
 스캔 탭에서 해당 경로를 직접 입력합니다.
 
-GPU를 사용할 예정이면 `nvidia-container-toolkit` 설치 후
-`docker-compose.yml`의 GPU 예약 주석을 해제하세요.
+### Docker에서 WD Tagger 사용
+
+기본 이미지에는 ML 의존성이 **포함되지 않습니다**(CUDA 런타임 때문에 약 2GB
+증가). 필요하면 빌드 인자로 켜세요:
+
+```bash
+docker compose build --build-arg WITH_ML=true
+```
+
+또는 `docker-compose.yml`의 `WITH_ML: "true"`로 바꿉니다. GPU를 쓰려면
+`nvidia-container-toolkit` 설치 후 같은 파일의 GPU 예약 주석도 해제하세요.
+태거 모델은 `HF_HOME`이 데이터 볼륨을 가리키므로 컨테이너를 다시 만들어도
+재다운로드하지 않습니다.
 
 ## 업그레이드
 

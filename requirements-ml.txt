@@ -1,6 +1,20 @@
-# Optional ML dependencies for WD Tagger auto-tagging.
+# Optional ML dependencies for WD Tagger auto-tagging (tags + content
+# rating). Install with:
+#
 #   pip install -r requirements-ml.txt
-# Use plain `onnxruntime` instead of `onnxruntime-gpu` for CPU-only setups.
+#
+# The CUDA runtime is pulled from pip, so no system CUDA toolkit is
+# required — run.sh puts these libraries on the loader path for you.
+#
+# onnxruntime-gpu is pinned to the CUDA 12 line. Newer releases (1.23+)
+# link against CUDA 13 (libcudart.so.13) and fail to import on hosts
+# without a CUDA 13 runtime, even when the driver reports CUDA 13.x.
+#
+# CPU-only host: replace the three nvidia-* lines and onnxruntime-gpu
+# with a single `onnxruntime>=1.19` (tagging still works, just slower).
 numpy>=1.26
-onnxruntime-gpu>=1.18
+onnxruntime-gpu>=1.19,<1.23
+nvidia-cuda-runtime-cu12>=12.1
+nvidia-cublas-cu12>=12.1
+nvidia-cudnn-cu12>=9.0
 huggingface_hub>=0.23
