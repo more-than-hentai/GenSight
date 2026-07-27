@@ -322,13 +322,19 @@ def path_scope(root: str, recursive: bool = True) -> tuple[str, list]:
     so reconciling it against every descendant row would misclassify
     subdirectory rows as missing.
 
-    Raises ValueError on an empty root — an unbounded scope is never
-    what a caller of this function means.
+    The filesystem root is a legitimate scope (a watch may be configured
+    on "/"), and its prefix is "/" — matching every absolute path. Only an
+    empty root is refused, since that is a caller mistake rather than a
+    deliberate everything-scope.
     """
-    root = str(root or "").rstrip("/")
-    if not root:
+    # Never strip whitespace: "/imgs/set " is a different directory from
+    # "/imgs/set", and trimming would scope the caller at its neighbour.
+    raw = str(root or "")
+    if not raw.strip():
         raise ValueError("path_scope requires a non-empty root")
-    prefix = root + "/"
+    root = raw.rstrip("/")
+    # rstrip() eats "/" entirely; the root directory's prefix is just "/".
+    prefix = (root + "/") if root else "/"
     # substr(path, 1, N) = prefix  →  "path starts with prefix", literally.
     clause = f"substr(path, 1, {len(prefix)}) = ?"
     args: list = [prefix]
@@ -933,12 +939,22 @@ _ARCHIVE_COLUMNS = (
 )
 
 
-def archive_rows(paths: list[str], reason: str, batch_id: str) -> int:
+class RevisionConflict(RuntimeError):
+    """The library changed between planning and archiving."""
+
+
+def archive_rows(paths: list[str], reason: str, batch_id: str,
+                 expected_version: int | None = None) -> int:
     """Move rows from `images` into `archived_images` atomically.
 
     INSERT..SELECT then DELETE inside one transaction: a partial archive
     would either lose rows outright or leave them duplicated in both
     tables, and both are worse than failing the whole operation.
+
+    `expected_version` is re-checked after the write lock is taken, not
+    just by the caller beforehand. Checking outside leaves a window in
+    which a concurrent writer lands between the check and the archive, so
+    rows nobody previewed get swept up.
     """
     if not paths:
         return 0
@@ -946,6 +962,13 @@ def archive_rows(paths: list[str], reason: str, batch_id: str) -> int:
     conn = connect()
     archived = 0
     with conn:
+        # BEGIN IMMEDIATE takes the write lock up front so the version
+        # check below cannot be overtaken by another writer.
+        conn.execute("BEGIN IMMEDIATE")
+        if expected_version is not None and data_version() != expected_version:
+            conn.execute("ROLLBACK")
+            raise RevisionConflict(
+                "the library changed since the preview; preview again")
         # Chunked to stay under SQLite's bound-parameter limit on a
         # large purge, but all chunks share the one transaction.
         for i in range(0, len(paths), 500):
@@ -974,13 +997,24 @@ def get_archived(path: str) -> dict | None:
     return dict(row) if row else None
 
 
-def restore_archived(batch_id: str) -> int:
-    """Put a whole purge batch back into `images`, one transaction."""
+def restore_archived(batch_id: str) -> dict:
+    """Put a whole purge batch back into `images`, one transaction.
+
+    OR IGNORE, not OR REPLACE: a path can be live again by the time the
+    operator restores an old batch (they re-scanned the directory, which
+    revived and then refreshed the row). The live row is the newer of the
+    two, so restoring must not overwrite it with the snapshot. Those
+    paths are reported as `skipped` and their snapshots dropped with the
+    rest of the batch.
+    """
     cols = ", ".join(_ARCHIVE_COLUMNS)
     conn = connect()
     with conn:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM archived_images WHERE batch_id=?", (batch_id,)
+        ).fetchone()[0]
         cur = conn.execute(
-            f"""INSERT OR REPLACE INTO images ({cols})
+            f"""INSERT OR IGNORE INTO images ({cols})
                 SELECT {cols} FROM archived_images WHERE batch_id=?""",
             (batch_id,),
         )
@@ -988,26 +1022,41 @@ def restore_archived(batch_id: str) -> int:
         conn.execute("DELETE FROM archived_images WHERE batch_id=?", (batch_id,))
     if restored:
         bump_version()
-    return restored
+    return {"restored": restored, "skipped": max(0, total - restored)}
 
 
 def restore_archived_path(path: str) -> bool:
     """Reactivate one archived row — used when a purged file is scanned
     again, so its tags/quality/rating come back instead of the enrichment
-    being recomputed on the GPU."""
+    being recomputed on the GPU.
+
+    OR IGNORE for the same reason as `restore_archived`: if a live row
+    already exists it is the newer one and wins.
+    """
     cols = ", ".join(_ARCHIVE_COLUMNS)
     conn = connect()
     with conn:
         cur = conn.execute(
-            f"""INSERT OR REPLACE INTO images ({cols})
+            f"""INSERT OR IGNORE INTO images ({cols})
                 SELECT {cols} FROM archived_images WHERE path=?""",
             (path,),
         )
-        if not cur.rowcount:
-            return False
+        restored = bool(cur.rowcount)
+        # The snapshot goes either way: it was restored, or it lost to a
+        # newer live row and keeping it would strand it forever.
         conn.execute("DELETE FROM archived_images WHERE path=?", (path,))
-    bump_version()
-    return True
+    if restored:
+        bump_version()
+    return restored
+
+
+def drop_archived_path(path: str) -> int:
+    """Discard one snapshot without restoring it — used when the file at
+    that path is no longer the file the snapshot describes."""
+    conn = connect()
+    with conn:
+        cur = conn.execute("DELETE FROM archived_images WHERE path=?", (path,))
+    return cur.rowcount or 0
 
 
 def archive_summary() -> dict:

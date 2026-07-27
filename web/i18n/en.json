@@ -209,6 +209,7 @@
   "settings.purgeFilesUntouched": "Files deleted",
   "settings.purgeActiveScan": "A scan is running on this path",
   "settings.purgeWatched": "Watched paths",
+  "settings.purgePaddedRoot": "The path has leading/trailing whitespace — confirm this is the path you meant",
   "settings.archive": "Archive",
   "settings.archiveRetention": "Retention (days)",
   "settings.archivePruneExpired": "Prune expired",
@@ -216,6 +217,7 @@
   "settings.archivePruneAllConfirm": "Permanently delete the entire archive? This cannot be undone.",
   "settings.archiveHint": "Entries past the retention window are pruned automatically (0 = prune by hand only). Deleting all is irreversible.",
   "settings.archiveStored": "Stored",
+  "settings.archiveSkipped": "skipped, a newer record already exists",
   "settings.archiveOldest": "Oldest entry",
   "settings.archiveExpired": "Expired"
 }

@@ -6,6 +6,7 @@ behind with no way to remove them, and the only cleanup path
 state.
 """
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -213,6 +214,51 @@ def test_purge_token_is_single_use(tmp_path, monkeypatch):
                        json={"token": token}).status_code == 409
 
 
+def test_whitespace_in_root_never_retargets_a_neighbour(tmp_path, monkeypatch):
+    """`"/a/set "` and `"/a/set"` are different directories on POSIX.
+
+    Trimming the request would purge the neighbour's records under a path
+    the operator never named, so a padded root must resolve to itself.
+    """
+    client = _client(tmp_path, monkeypatch)
+    victim = _seed(tmp_path / "set" / "victim.png")
+    intended = _seed(tmp_path / "set " / "intended.png")
+
+    p = client.post("/api/admin/library/purge/preview",
+                    json={"root": f"{tmp_path}/set "}).json()
+    assert p["root"] == f"{tmp_path}/set ", "the root was silently trimmed"
+    assert p["targets"] == 1
+    # Flagged so the UI can ask "did you mean this?" — the trailing space is
+    # indistinguishable from a paste accident, and only the operator knows.
+    assert p["padded_root"] is True
+
+    client.post("/api/admin/library/purge", json={"token": p["token"]})
+    assert db.has_image(str(victim)), "purged a directory that was not named"
+    assert not db.has_image(str(intended))
+
+
+def test_trailing_whitespace_matches_nothing_and_is_flagged(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed(tmp_path / "imgs" / "a.png")
+
+    p = client.post("/api/admin/library/purge/preview",
+                    json={"root": f"{tmp_path}/imgs "}).json()
+    assert p["padded_root"] is True
+    assert p["targets"] == 0, "whitespace must not silently match the real path"
+
+
+def test_leading_whitespace_in_root_is_rejected(tmp_path, monkeypatch):
+    """Leading space makes the path non-absolute, which is refused outright
+    rather than quietly reinterpreted."""
+    client = _client(tmp_path, monkeypatch)
+    _seed(tmp_path / "imgs" / "a.png")
+
+    r = client.post("/api/admin/library/purge/preview",
+                    json={"root": f" {tmp_path}/imgs"})
+    assert r.status_code == 400
+    assert "absolute" in r.json()["detail"]
+
+
 def test_unused_plans_are_capped(tmp_path, monkeypatch):
     """Each plan holds every target path, so unexecuted previews must not
     accumulate for the whole TTL window."""
@@ -246,6 +292,178 @@ def test_purge_rejects_stale_plan_after_library_changes(tmp_path, monkeypatch):
     assert r.status_code == 409
     assert "changed" in r.json()["detail"]
     assert db.query_images(directory=str(root))[0] == 2, "nothing was purged"
+
+
+def test_purge_refuses_while_a_watch_is_enabled(tmp_path, monkeypatch):
+    """An enabled watch re-ingests on a timer, so purging under it would be
+    undone by the next sweep."""
+    client = _client(tmp_path, monkeypatch)
+    root = tmp_path / "imgs"
+    _seed(root / "a.png")
+    db.add_watch(str(root), True, 30)
+
+    token = client.post("/api/admin/library/purge/preview",
+                        json={"root": str(root)}).json()["token"]
+    r = client.post("/api/admin/library/purge", json={"token": token})
+    assert r.status_code == 409
+    assert "watch" in r.json()["detail"]
+    assert db.query_images(directory=str(root))[0] == 1, "nothing was purged"
+
+
+def test_purge_root_rejects_dot_segments(tmp_path, monkeypatch):
+    """Folding "link/.." lexically can scope a different directory when the
+    component is a symlink, so dot segments are refused outright."""
+    client = _client(tmp_path, monkeypatch)
+    _seed(tmp_path / "imgs" / "a.png")
+
+    r = client.post("/api/admin/library/purge/preview",
+                    json={"root": f"{tmp_path}/imgs/../imgs"})
+    assert r.status_code == 400
+    assert ".." in r.json()["detail"]
+
+
+def test_missing_mode_aborts_when_a_file_came_back(tmp_path, monkeypatch):
+    """A remount between preview and execute changes no database row, so the
+    version check cannot see it — the files must be re-checked."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    root = tmp_path / "imgs"
+    img = _seed(root / "a.png")
+    img.unlink()
+
+    plan = purge.plan(str(root), mode="missing")
+    assert plan["targets"] == 1
+
+    _png(img)  # the file is back before the operator confirms
+
+    with pytest.raises(purge.PurgeError, match="no longer"):
+        purge.execute(plan["token"])
+    assert db.has_image(str(img)), "archived a file that exists again"
+
+
+def test_archive_aborts_when_the_library_moves_mid_transaction(tmp_path,
+                                                               monkeypatch):
+    """The version is re-checked after the write lock is taken, not only by
+    the caller beforehand."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    root = tmp_path / "imgs"
+    img = _seed(root / "a.png")
+
+    with pytest.raises(db.RevisionConflict):
+        db.archive_rows([str(img)], "test", "batch",
+                        expected_version=db.data_version() + 1)
+    assert db.has_image(str(img)), "rows were archived despite the conflict"
+
+
+def test_preview_captures_the_version_before_reading_rows(tmp_path,
+                                                          monkeypatch):
+    """A write landing while the preview is computed must invalidate it,
+    rather than being folded into the plan's own version."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    root = tmp_path / "imgs"
+    _seed(root / "a.png")
+
+    real_classify = purge._classify
+
+    def mutate_then_classify(paths):
+        _seed(root / "landed-during-preview.png")
+        return real_classify(paths)
+
+    monkeypatch.setattr(purge, "_classify", mutate_then_classify)
+    plan = purge.plan(str(root))
+    monkeypatch.setattr(purge, "_classify", real_classify)
+
+    with pytest.raises(purge.PurgeError, match="changed"):
+        purge.execute(plan["token"])
+
+
+def test_scope_covers_the_filesystem_root(tmp_path, monkeypatch):
+    """A watch may be configured on "/" — scoping it must not raise, which
+    would abort the whole watcher tick including retention pruning."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    _seed(tmp_path / "imgs" / "a.png")
+
+    clause, args = db.path_scope("/")
+    n = db.connect().execute(
+        f"SELECT COUNT(*) FROM images WHERE {clause}", args).fetchone()[0]
+    assert n == 1
+    with pytest.raises(ValueError):
+        db.path_scope("   ")
+
+
+def test_concurrent_execute_runs_the_plan_once(tmp_path, monkeypatch):
+    """Two requests arriving together must not both archive.
+
+    The token is claimed before validation, so the loser sees an unknown
+    token rather than racing through to a second archive pass.
+    """
+    _use_tmp_data(tmp_path, monkeypatch)
+    root = tmp_path / "imgs"
+    _seed(root / "a.png")
+    plan = purge.plan(str(root))
+
+    calls, gate = [], threading.Barrier(2, timeout=5)
+    real_archive = db.archive_rows
+
+    def counted(paths, reason, batch_id, **kw):
+        calls.append(batch_id)
+        return real_archive(paths, reason, batch_id, **kw)
+
+    monkeypatch.setattr(db, "archive_rows", counted)
+
+    outcomes: list[str] = []
+
+    def run():
+        try:
+            gate.wait()
+            purge.execute(plan["token"])
+            outcomes.append("ok")
+        except purge.PurgeError:
+            outcomes.append("refused")
+        except threading.BrokenBarrierError:  # pragma: no cover - timing only
+            outcomes.append("barrier")
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert sorted(outcomes) == ["ok", "refused"]
+    assert len(calls) == 1, "the plan was archived more than once"
+
+
+def test_restoring_a_batch_never_overwrites_a_newer_live_row(tmp_path,
+                                                             monkeypatch):
+    """Re-scanning a purged path revives and refreshes the row. Restoring
+    the old batch afterwards must not clobber it with the snapshot."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    root = tmp_path / "imgs"
+    img = _seed(root / "a.png", enrich=True)
+
+    plan = purge.plan(str(root))
+    purge.execute(plan["token"])
+    batch = db.archive_summary()["batches"][0]["batch_id"]
+
+    # The path is live again, with newer content than the snapshot.
+    db.upsert_image({"file": str(img), "filename": img.name,
+                     "prompt": "NEWER", "negative_prompt": "",
+                     "params": {}, "error": None})
+
+    result = db.restore_archived(batch)
+    assert result == {"restored": 0, "skipped": 1}
+    row = db.get_image(str(img))
+    assert row["prompt"] == "NEWER", "the newer live row was overwritten"
+    assert db.get_archived(str(img)) is None, "the snapshot was left stranded"
+
+
+def test_dot_segments_never_satisfy_an_allow_rule():
+    """"/api/library/../admin/..." passes a prefix test even though it
+    matches no route — authorization must not depend on who normalises it."""
+    from app.main import _user_allowed
+
+    assert _user_allowed("/api/library") is True
+    assert _user_allowed("/api/library/../admin/library/purge") is False
+    assert _user_allowed("/api/library/./item") is False
 
 
 def test_missing_mode_aborts_when_rows_are_unreadable(tmp_path, monkeypatch):
@@ -319,6 +537,30 @@ def test_rescan_revives_archived_enrichment(tmp_path, monkeypatch):
     assert revived["quality_score"] == 82.0
     assert revived["rating"] == 4 and revived["group_name"] == "portrait"
     assert db.get_archived(str(a)) is None
+
+
+def test_rescan_does_not_give_a_different_file_the_old_tags(tmp_path,
+                                                            monkeypatch):
+    """Enrichment is keyed by path, and paths get reused. A new image at a
+    purged path must be tagged on its own merits, not inherit the old one's."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    from app.scanner import process_and_store
+
+    root = tmp_path / "imgs"
+    a = _seed(root / "a.png", enrich=True)
+    plan = purge.plan(str(root))
+    purge.execute(plan["token"])
+
+    # A visibly different image lands at the same name.
+    a.unlink()
+    Image.new("RGB", (200, 120), "orange").save(a)
+
+    process_and_store(a)
+    row = db.get_image(str(a))
+    assert row is not None
+    assert row["tags"] in (None, []), "inherited the previous file's tags"
+    assert row["quality_score"] is None, "inherited the previous quality score"
+    assert db.get_archived(str(a)) is None, "the stale snapshot was left behind"
 
 
 def test_retention_prunes_only_expired(tmp_path, monkeypatch):

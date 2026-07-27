@@ -209,6 +209,7 @@
   "settings.purgeFilesUntouched": "삭제되는 파일",
   "settings.purgeActiveScan": "이 경로에 스캔이 실행 중입니다",
   "settings.purgeWatched": "감시 중인 경로",
+  "settings.purgePaddedRoot": "경로 앞뒤에 공백이 있습니다 — 의도한 경로인지 확인하세요",
   "settings.archive": "아카이브",
   "settings.archiveRetention": "보존 기간(일)",
   "settings.archivePruneExpired": "만료분 정리",
@@ -216,6 +217,7 @@
   "settings.archivePruneAllConfirm": "아카이브를 전부 영구 삭제할까요? 복구할 수 없습니다.",
   "settings.archiveHint": "보존 기간이 지난 항목은 자동으로 정리됩니다(0 = 수동으로만 정리). 전체 삭제는 되돌릴 수 없습니다.",
   "settings.archiveStored": "보관 중",
+  "settings.archiveSkipped": "이미 최신 기록이 있어 건너뜀",
   "settings.archiveOldest": "가장 오래된 항목",
   "settings.archiveExpired": "만료됨"
 }

@@ -24,22 +24,41 @@ logger = logging.getLogger("gensight.scanner")
 MAX_WORKERS = 32
 
 
+def _revive_archived(path: Path) -> None:
+    """Restore an archived row for `path`, but only if it is the same file.
+
+    Enrichment (tags, content rating, quality, group, stars) is keyed by
+    path, and a path gets reused: purge a cat image, drop a dog image at the
+    same name, rescan, and the dog would inherit the cat's tags. mtime+size
+    is a cheap identity check that catches exactly that; a snapshot that
+    fails it is dropped so the row is rebuilt clean and the tagger reruns.
+    """
+    try:
+        snapshot = db.get_archived(str(path))
+        if not snapshot:
+            return
+        st = path.stat()
+        same = (int(snapshot["size"] or 0) == st.st_size
+                and abs(float(snapshot["mtime"] or 0) - st.st_mtime) < 1.0)
+        if not same:
+            db.drop_archived_path(str(path))
+            logger.info(
+                "archived record for %s describes a different file "
+                "(size %s→%s); rebuilding instead of restoring",
+                path, snapshot["size"], st.st_size)
+            return
+        if db.restore_archived_path(str(path)):
+            logger.info("restored archived record for %s", path)
+    except Exception:  # noqa: BLE001 - never block ingest on this
+        logger.exception("archive restore failed for %s", path)
+
+
 def process_and_store(path: Path | str) -> dict[str, Any]:
     """Extract metadata + perceptual hash and persist to the library DB.
 
     Shared by scan jobs and the folder watcher. Never raises.
     """
     path = Path(path)
-    # A previously purged file coming back (re-registered directory, or an
-    # undone mistake) is restored from the archive first, so the upsert
-    # below refreshes its extracted metadata on top of the preserved
-    # tags/quality/rating instead of starting from a blank row and
-    # requiring another GPU tagging pass.
-    try:
-        if db.restore_archived_path(str(path)):
-            logger.info("restored archived record for %s", path)
-    except Exception:  # noqa: BLE001 - never block ingest on this
-        logger.exception("archive restore failed for %s", path)
     try:
         item = metadata.extract(path)
     except Exception as e:  # noqa: BLE001
@@ -50,6 +69,16 @@ def process_and_store(path: Path | str) -> dict[str, Any]:
         }
     phash = None if item["error"] else imghash.dhash(path)
     item["phash"] = phash
+    # A previously purged file coming back (re-registered directory, or an
+    # undone mistake) is revived from the archive so the upsert below
+    # refreshes its metadata on top of the preserved tags/quality/rating
+    # instead of starting blank and requiring another GPU tagging pass.
+    #
+    # Done here rather than before extraction for two reasons: the window in
+    # which a concurrent purge could archive the row between the revival and
+    # the upsert shrinks to the upsert itself, and the identity check below
+    # needs the file's current stat.
+    _revive_archived(path)
     try:
         db.upsert_image(item, phash)
     except Exception:  # noqa: BLE001 - DB hiccup must not kill the scan

@@ -33,8 +33,17 @@ MODES = ("all", "missing")
 # what the preview counted. On a large root that list is tens of megabytes, and
 # expiry alone does not bound it — previews inside one TTL window accumulate.
 MAX_PLANS = 8
+# Plan count alone does not bound memory: eight million-row roots is a lot of
+# path strings. Evict oldest-first until the retained total fits too.
+MAX_RETAINED_TARGETS = 500_000
 
 _lock = threading.Lock()
+# Plans live in this process only, as does db's revision counter. GenSight
+# runs a single uvicorn worker (no --workers anywhere in run.sh, Dockerfile
+# or compose), so threads share both. Adding workers would break this:
+# a preview served by one worker could not be executed by another, and
+# neither would see the other's writes when validating a plan. Persist plans
+# and the revision in SQLite before scaling out.
 _plans: dict[str, dict] = {}
 
 
@@ -93,18 +102,36 @@ def plan(root: str, recursive: bool = True, mode: str = "all") -> dict:
     """Compute a purge plan and register it under a one-shot token."""
     if mode not in MODES:
         raise PurgeError(f"mode must be one of {MODES}")
-    raw = Path(str(root or "").strip()).expanduser()
-    if not str(raw).strip():
+    given = str(root or "")
+    if not given.strip():
         raise PurgeError("root is required")
-    # Normalise lexically, not via resolve(): the stored paths are what
-    # the scanner wrote, and resolving symlinks here could produce a
-    # prefix that matches nothing (or, worse, something else).
+    # Surrounding whitespace is NOT stripped. A directory may legally be
+    # named "set " on POSIX, and trimming would silently retarget the purge
+    # at the different directory "set" — deleting records the operator never
+    # named. Pasted whitespace instead yields zero targets, which the
+    # preview reports (and `padded` lets the UI explain why).
+    padded = given != given.strip()
+    raw = Path(given).expanduser()
+    # Dot segments are refused rather than folded away. Lexical normpath
+    # would rewrite "/safe/link/.." to "/safe", but if `link` is a symlink
+    # to /other/sub the OS means "/other" — so folding could scope the purge
+    # at a directory the operator never named. resolve() is not the answer
+    # either: it rewrites symlinks the scanner stored unresolved, and a root
+    # that no longer exists cannot be resolved at all.
+    if any(seg in (".", "..") for seg in str(raw).split(os.sep)):
+        raise PurgeError(
+            "root must not contain '.' or '..' segments; give the real path")
     canonical = os.path.normpath(str(raw))
     if canonical in ("/", ""):
         raise PurgeError("refusing to purge the filesystem root")
     if not os.path.isabs(canonical):
         raise PurgeError(f"root must be an absolute path: {canonical}")
 
+    # Captured BEFORE reading rows, so a write that lands while the preview
+    # is being computed invalidates the plan. Capturing it afterwards would
+    # fold such a write into the plan's own version and let execute() accept
+    # a plan whose counts were already stale when shown.
+    version = db.data_version()
     clause, args = db.path_scope(canonical, recursive)
     conn = db.connect()
     rows = [r["path"] for r in conn.execute(
@@ -145,10 +172,11 @@ def plan(root: str, recursive: bool = True, mode: str = "all") -> dict:
         "missing": len(missing),
         "inaccessible": len(inaccessible),
         "targets": len(targets),
+        "padded_root": padded,
         "at_risk": at_risk,
         "overlaps": _overlaps(canonical),
         "files_deleted": 0,
-        "data_version": db.data_version(),
+        "data_version": version,
         "expires_at": time.time() + TOKEN_TTL,
     }
     with _lock:
@@ -159,10 +187,16 @@ def plan(root: str, recursive: bool = True, mode: str = "all") -> dict:
             _plans.pop(stale, None)
         _plans[token] = {**plan_data, "_targets": targets}
         # dict preserves insertion order, so the front is the oldest plan.
-        while len(_plans) > MAX_PLANS:
-            evicted, _ = next(iter(_plans.items()))
+        def _retained() -> int:
+            return sum(len(p["_targets"]) for p in _plans.values())
+
+        while len(_plans) > 1 and (
+            len(_plans) > MAX_PLANS or _retained() > MAX_RETAINED_TARGETS
+        ):
+            evicted = next(iter(_plans))
             _plans.pop(evicted, None)
-            logger.info("evicted an unused purge plan (cap %d)", MAX_PLANS)
+            logger.info("evicted an unused purge plan (plans=%d, targets=%d)",
+                        len(_plans), _retained())
     return plan_data
 
 
@@ -178,17 +212,17 @@ def get_plan(token: str) -> dict | None:
 
 def execute(token: str) -> dict:
     """Run a previously computed plan, if it is still exactly valid."""
+    # Claim the token before validating anything. Looking it up and popping
+    # it after the archive let two concurrent requests both pass validation
+    # and both run the archive; popping first means the loser sees an
+    # unknown token, which is what "single use" has to mean.
     with _lock:
-        stored = _plans.get(token)
+        stored = _plans.pop(token, None)
     if stored is None:
         raise PurgeError("unknown or already-used purge token; preview again")
     if stored["expires_at"] < time.time():
-        with _lock:
-            _plans.pop(token, None)
         raise PurgeError("purge plan expired; preview again")
     if stored["data_version"] != db.data_version():
-        with _lock:
-            _plans.pop(token, None)
         raise PurgeError(
             "the library changed since the preview; preview again")
     if stored["mode"] == "missing" and stored["inaccessible"]:
@@ -198,11 +232,26 @@ def execute(token: str) -> dict:
             "offline mount or a permission problem — refusing to purge")
 
     targets = stored["_targets"]
+    if stored["mode"] == "missing":
+        # Re-stat rather than trust the preview: a remount or a restored
+        # backup between preview and execute changes nothing in the
+        # database, so the version check cannot see it, and archiving a
+        # file that is present again would be plain wrong.
+        back, still_gone, unreadable = _classify(targets)
+        if back or unreadable:
+            raise PurgeError(
+                f"{len(back) + len(unreadable)} of these files are no longer "
+                "missing (or became unreadable) since the preview; "
+                "preview again")
+        targets = still_gone
+
     batch_id = uuid.uuid4().hex[:12]
     reason = f"{stored['mode']} purge of {stored['root']}"
-    archived = db.archive_rows(targets, reason, batch_id)
-    with _lock:
-        _plans.pop(token, None)
+    try:
+        archived = db.archive_rows(targets, reason, batch_id,
+                                   expected_version=stored["data_version"])
+    except db.RevisionConflict as e:
+        raise PurgeError(str(e)) from e
 
     thumbs = 0
     try:

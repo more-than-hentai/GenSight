@@ -209,6 +209,7 @@
   "settings.purgeFilesUntouched": "削除されるファイル",
   "settings.purgeActiveScan": "このパスでスキャンが実行中です",
   "settings.purgeWatched": "監視中のパス",
+  "settings.purgePaddedRoot": "パスの前後に空白があります — 意図したパスか確認してください",
   "settings.archive": "アーカイブ",
   "settings.archiveRetention": "保存期間（日）",
   "settings.archivePruneExpired": "期限切れを整理",
@@ -216,6 +217,7 @@
   "settings.archivePruneAllConfirm": "アーカイブをすべて完全に削除しますか？復元できません。",
   "settings.archiveHint": "保存期間を過ぎた項目は自動的に整理されます（0 = 手動のみ）。すべて削除は取り消せません。",
   "settings.archiveStored": "保管中",
+  "settings.archiveSkipped": "すでに新しい記録があるためスキップ",
   "settings.archiveOldest": "最も古い項目",
   "settings.archiveExpired": "期限切れ"
 }

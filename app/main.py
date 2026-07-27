@@ -80,6 +80,12 @@ def _user_allowed(path: str) -> bool:
     routers/admin_library.py), which no allow rule covers, so they are
     admin-only by default instead of by remembering to deny them.
     """
+    # A path carrying dot segments matches none of our routes, but it can
+    # still satisfy a prefix test: "/api/library/../admin/library/purge"
+    # passes the /api/library rule. Nothing legitimate needs them, so refuse
+    # rather than let a proxy's normalisation decide authorization.
+    if any(seg in (".", "..") for seg in path.split("/")):
+        return False
     if any(_prefix_match(path, p) for p in USER_DENIED_PREFIXES):
         return False
     return any(_prefix_match(path, p) for p in USER_ALLOWED_PREFIXES)

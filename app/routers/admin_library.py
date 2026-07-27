@@ -106,6 +106,16 @@ def purge_execute(body: PurgeBody, request: Request):
         raise HTTPException(
             409, f"a scan is running on an overlapping path "
                  f"({busy[0]['directory']}); cancel it or wait, then retry")
+    # An enabled watch is the same hazard on a timer: its next sweep re-ingests
+    # the files and undoes the purge, and a sweep already in flight can strand
+    # the enrichment in the archive while inserting a blank live row.
+    watching = [w["directory"] for w in plan["overlaps"]["watches"]
+                if w["enabled"]]
+    if watching:
+        raise HTTPException(
+            409, f"an enabled watch covers this path ({watching[0]}); "
+                 "disable it first, otherwise the next sweep re-adds "
+                 "everything you just cleaned")
     try:
         result = purge.execute(body.token)
     except purge.PurgeError as e:
@@ -130,12 +140,12 @@ def archive_status():
 
 @router.post("/library/archive/restore")
 def archive_restore(body: RestoreBody, request: Request):
-    restored = db.restore_archived(body.batch_id)
-    if not restored:
+    result = db.restore_archived(body.batch_id)
+    if not result["restored"] and not result["skipped"]:
         raise HTTPException(404, "no archived rows for that batch")
     audit.record("library.archive_restore", actor=_actor(request),
-                 target=body.batch_id, detail={"restored": restored})
-    return {"restored": restored, "batch_id": body.batch_id}
+                 target=body.batch_id, detail=result)
+    return {**result, "batch_id": body.batch_id}
 
 
 @router.post("/library/archive/prune")

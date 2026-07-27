@@ -553,9 +553,16 @@ async function doLogin() {
 // Holds the token from the last preview. Cleared whenever the inputs
 // change so a stale plan can never be executed by accident.
 let purgeToken = null;
+let purgePlan = null;
+// Incremented on every input change and every new preview. A preview whose
+// generation is no longer current is a response for inputs the operator has
+// since edited, so it must not arm the execute button.
+let purgeGeneration = 0;
 
 function resetPurgePlan() {
   purgeToken = null;
+  purgePlan = null;
+  purgeGeneration += 1;
   $("#purgeRun").classList.add("hidden");
 }
 ["#purgeRoot", "#purgeMode", "#purgeRecursive"].forEach((sel) => {
@@ -564,18 +571,23 @@ function resetPurgePlan() {
 });
 
 $("#purgePreview").onclick = async () => {
-  const root = $("#purgeRoot").value.trim();
-  if (!root) {
+  // Sent verbatim: trimming here would retarget a directory legitimately
+  // named with a trailing space at its differently-named neighbour.
+  const root = $("#purgeRoot").value;
+  if (!root.trim()) {
     toast(t("settings.purgeNeedRoot", "정리할 경로를 입력하세요"), true);
     return;
   }
   resetPurgePlan();
+  const generation = purgeGeneration;
   const box = $("#purgeResult");
   try {
     const p = await api.send("POST", "/api/admin/library/purge/preview", {
       root, recursive: $("#purgeRecursive").checked, mode: $("#purgeMode").value,
     });
+    if (generation !== purgeGeneration) return;  // inputs changed while waiting
     purgeToken = p.token;
+    purgePlan = p;
     const risk = p.at_risk;
     const lines = [
       `${t("settings.purgeScope", "대상 경로")}: ${p.root}` +
@@ -598,6 +610,10 @@ $("#purgePreview").onclick = async () => {
     }
     // Only an *enabled* watch fights the purge and blocks execution; warning
     // about a disabled one would send the operator hunting for nothing.
+    if (p.padded_root) {
+      lines.push(`⚠ ${t("settings.purgePaddedRoot",
+        "경로 앞뒤에 공백이 있습니다 — 의도한 경로인지 확인하세요")}`);
+    }
     const watching = ov.watches.filter((w) => w.enabled);
     if (watching.length) {
       lines.push(`⚠ ${t("settings.purgeWatched", "감시 중인 경로")}: ` +
@@ -618,13 +634,20 @@ $("#purgeRun").onclick = async () => {
     toast(t("settings.purgeNeedPreview", "먼저 미리보기를 실행하세요"), true);
     return;
   }
-  if (!confirm(t("settings.purgeConfirm",
+  // Name the path and the count in the dialog: the summary above can scroll
+  // out of view, and this is the last stop before records move.
+  const plan = purgePlan || {};
+  if (!confirm(`${plan.root || ""}\n${plan.targets || 0}\n\n` +
+               t("settings.purgeConfirm",
                  "미리보기 내용대로 라이브러리 기록을 정리할까요? (파일은 삭제되지 않고, 아카이브에서 복구할 수 있습니다)"))) {
     return;
   }
+  // Consume the token before awaiting so a double-click cannot send twice.
+  const token = purgeToken;
+  purgeToken = null;
+  $("#purgeRun").classList.add("hidden");
   try {
-    const r = await api.send("POST", "/api/admin/library/purge",
-                             { token: purgeToken });
+    const r = await api.send("POST", "/api/admin/library/purge", { token });
     toast(`${t("settings.purgeDone", "정리된 기록")}: ${r.archived}`);
     resetPurgePlan();
     $("#purgeResult").classList.add("hidden");
@@ -666,7 +689,10 @@ async function renderArchive() {
       try {
         const r = await api.send("POST", "/api/admin/library/archive/restore",
                                  { batch_id: b.batch_id });
-        toast(`${t("lib.restored", "복구되었습니다")}: ${r.restored}`);
+        // Skipped means a newer live row already held that path and won.
+        toast(`${t("lib.restored", "복구되었습니다")}: ${r.restored}` +
+          (r.skipped ? ` (${t("settings.archiveSkipped",
+            "이미 최신 기록이 있어 건너뜀")}: ${r.skipped})` : ""));
         renderArchive();
       } catch (e) { toast(e.message, true); }
     };
