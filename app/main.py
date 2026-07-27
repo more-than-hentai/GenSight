@@ -127,4 +127,26 @@ async def auth_middleware(request: Request, call_next):
 for router in routers.ALL:
     app.include_router(router)
 
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+class RevalidatingStatic(StaticFiles):
+    """Serve web assets with `Cache-Control: no-cache`.
+
+    StaticFiles sends only ETag/Last-Modified. With no Cache-Control at all,
+    browsers fall back to heuristic freshness and may reuse a cached file
+    without revalidating — so after an upgrade you get the new index.html
+    with a stale app.js. The markup then has buttons whose handlers were
+    never attached, which looks like "the button does nothing" rather than
+    like a caching problem.
+
+    `no-cache` means "revalidate before use", not "do not store": the ETag
+    still turns unchanged files into a 304, so this costs one conditional
+    request per asset, not a re-download. There is no build step here to
+    hash filenames with, which would be the alternative.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", RevalidatingStatic(directory=WEB_DIR, html=True), name="web")
