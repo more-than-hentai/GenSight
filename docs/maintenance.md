@@ -147,6 +147,7 @@ watch sweep /imgs: 3 new/changed file(s) ingested (120 known, ...) in 0.4s
 | 이미지 포함 복사가 텍스트만 복사됨 | 클립보드 이미지 쓰기는 HTTPS 또는 localhost에서만 동작. `127.0.0.1`로 접속하세요 |
 | 스캔 작업 목록이 재시작 후 비어 있음 | 작업(job) 진행 상태는 메모리에만 있습니다. 추출된 이미지 기록 자체는 `gensight.db`에 영구 저장되므로 **라이브러리** 탭에 그대로 남습니다 |
 | 디렉토리 등록을 해제했는데 라이브러리에 기록이 남음 | 정상 동작입니다 — 등록 목록은 즐겨찾기일 뿐 카탈로그와 독립입니다. 기록까지 지우려면 아래 [라이브러리 기록 정리](#라이브러리-기록-정리-purge)를 쓰세요 |
+| 업그레이드 후 새 버튼이 눌러지지 않음 | 브라우저가 옛 `app.js`를 캐시에서 쓰는 상태 — 새 마크업의 버튼에 핸들러가 붙지 않습니다. 강제 새로고침(`Ctrl+Shift+R`)하세요. 정적 파일에 `Cache-Control: no-cache`를 붙여 재발을 막았지만, **그 수정 이전에 캐시된 파일에는 한 번의 강제 새로고침이 필요합니다** |
 | GPU가 목록에 없음 | `nvidia-smi` 동작 확인. Docker라면 `nvidia-container-toolkit` 설치 **및 데몬 등록**(`nvidia-ctk runtime configure --runtime=docker` 후 재시작) 필요 |
 | `permission denied ... /var/run/docker.sock` | 사용자가 `docker` 그룹에 없음 — [설치 가이드](installation.md)의 "sudo 없이 실행" 참고 (그룹 변경은 재로그인 후 적용) |
 | `could not select device driver "nvidia"` | 툴킷이 데몬에 등록되지 않음. `docker info \| grep Runtimes`에 `nvidia`가 보여야 함 |

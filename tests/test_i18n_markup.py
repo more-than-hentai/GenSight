@@ -84,3 +84,20 @@ def test_catalogues_have_identical_key_sets():
             f"{lang}.json differs from ko.json — "
             f"missing {sorted(base - s)}, extra {sorted(s - base)}"
         )
+
+
+def test_web_assets_are_served_revalidating():
+    """A stale app.js behind a fresh index.html renders buttons whose
+    handlers were never attached, which looks like a broken UI rather than
+    a caching problem. Assets must carry Cache-Control so browsers cannot
+    fall back to heuristic freshness."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app, raise_server_exceptions=False)
+    for path in ("/", "/app.js", "/style.css"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert "no-cache" in r.headers.get("cache-control", ""), path
+        assert r.headers.get("etag"), f"{path} lost its ETag revalidation"
