@@ -29,6 +29,10 @@ logger = logging.getLogger("gensight.purge")
 
 TOKEN_TTL = 300.0  # a plan older than this must be re-previewed
 MODES = ("all", "missing")
+# A plan retains the full target path list so that execute() deletes exactly
+# what the preview counted. On a large root that list is tens of megabytes, and
+# expiry alone does not bound it — previews inside one TTL window accumulate.
+MAX_PLANS = 8
 
 _lock = threading.Lock()
 _plans: dict[str, dict] = {}
@@ -154,6 +158,11 @@ def plan(root: str, recursive: bool = True, mode: str = "all") -> dict:
         for stale in [t for t, p in _plans.items() if p["expires_at"] < now]:
             _plans.pop(stale, None)
         _plans[token] = {**plan_data, "_targets": targets}
+        # dict preserves insertion order, so the front is the oldest plan.
+        while len(_plans) > MAX_PLANS:
+            evicted, _ = next(iter(_plans.items()))
+            _plans.pop(evicted, None)
+            logger.info("evicted an unused purge plan (cap %d)", MAX_PLANS)
     return plan_data
 
 

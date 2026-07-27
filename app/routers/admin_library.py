@@ -15,7 +15,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import audit, db, purge
+from .. import audit, auth, db, purge
 from ..scanner import manager
 
 logger = logging.getLogger("gensight")
@@ -24,12 +24,16 @@ logger = logging.getLogger("gensight")
 def require_admin(request: Request) -> str:
     """Defence in depth behind the middleware.
 
-    With auth disabled the middleware treats every caller as admin
-    (single-operator localhost); this keeps the same contract rather
-    than locking the owner out of their own maintenance tools.
+    With auth disabled every caller is the operator (single-user
+    localhost), which is checked first so the owner is never locked out
+    of their own maintenance tools. With auth on, the role must be
+    present and equal to "admin" — a missing role denies rather than
+    defaulting to admin, so a middleware that failed to run cannot open
+    these routes.
     """
-    role = getattr(request.state, "auth_role", "admin")
-    if role != "admin":
+    if not auth.enabled():
+        return ""
+    if getattr(request.state, "auth_role", None) != "admin":
         raise HTTPException(403, "admin privileges required")
     return getattr(request.state, "auth_user", "") or ""
 

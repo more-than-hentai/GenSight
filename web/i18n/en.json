@@ -198,6 +198,7 @@
   "settings.purgeDone": "Records cleaned",
   "settings.purgeScope": "Target path",
   "settings.purgeTargets": "To clean",
+  "settings.purgeScopeTotal": "of",
   "settings.purgePresent": "file present",
   "settings.purgeMissing": "file gone",
   "settings.purgeInaccessible": "unreadable",

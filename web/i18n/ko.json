@@ -198,6 +198,7 @@
   "settings.purgeDone": "정리된 기록",
   "settings.purgeScope": "대상 경로",
   "settings.purgeTargets": "정리 대상",
+  "settings.purgeScopeTotal": "경로 내 전체",
   "settings.purgePresent": "파일 있음",
   "settings.purgeMissing": "파일 없음",
   "settings.purgeInaccessible": "읽기 실패",

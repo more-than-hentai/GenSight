@@ -55,6 +55,8 @@ function t(key, fallback) {
 async function loadLang(lang) {
   state.i18n = await api.get(`/api/i18n/${lang}`);
   document.documentElement.lang = lang;
+  // Assigning textContent discards child nodes, so a data-i18n element must
+  // never contain another one — the outer pass would erase the inner.
   $$("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n, el.textContent); });
   $$("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh, el.placeholder); });
   initSortSelects(); // rebuild JS-generated option labels in the new language
@@ -578,8 +580,8 @@ $("#purgePreview").onclick = async () => {
     const lines = [
       `${t("settings.purgeScope", "대상 경로")}: ${p.root}` +
         (p.recursive ? "" : ` (${t("settings.noRecursive", "하위 폴더 제외")})`),
-      `${t("settings.purgeTargets", "정리 대상")}: ${p.targets} / ` +
-        `${t("results.count", "결과")} ${p.total}`,
+      `${t("settings.purgeTargets", "정리 대상")}: ${p.targets} ` +
+        `(${t("settings.purgeScopeTotal", "경로 내 전체")} ${p.total})`,
       `  ${t("settings.purgePresent", "파일 있음")}: ${p.present}` +
         `   ${t("settings.purgeMissing", "파일 없음")}: ${p.missing}` +
         `   ${t("settings.purgeInaccessible", "읽기 실패")}: ${p.inaccessible}`,
@@ -594,9 +596,12 @@ $("#purgePreview").onclick = async () => {
     if (ov.active_scans.length) {
       lines.push(`⚠ ${t("settings.purgeActiveScan", "이 경로에 스캔이 실행 중입니다")}`);
     }
-    if (ov.watches.length) {
+    // Only an *enabled* watch fights the purge and blocks execution; warning
+    // about a disabled one would send the operator hunting for nothing.
+    const watching = ov.watches.filter((w) => w.enabled);
+    if (watching.length) {
       lines.push(`⚠ ${t("settings.purgeWatched", "감시 중인 경로")}: ` +
-        ov.watches.map((w) => w.directory).join(", "));
+        watching.map((w) => w.directory).join(", "));
     }
     box.textContent = lines.join("\n");
     box.classList.remove("hidden");

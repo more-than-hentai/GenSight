@@ -213,6 +213,26 @@ def test_purge_token_is_single_use(tmp_path, monkeypatch):
                        json={"token": token}).status_code == 409
 
 
+def test_unused_plans_are_capped(tmp_path, monkeypatch):
+    """Each plan holds every target path, so unexecuted previews must not
+    accumulate for the whole TTL window."""
+    client = _client(tmp_path, monkeypatch)
+    root = tmp_path / "imgs"
+    _seed(root / "a.png")
+    monkeypatch.setattr(purge, "MAX_PLANS", 3)
+
+    tokens = [client.post("/api/admin/library/purge/preview",
+                          json={"root": str(root)}).json()["token"]
+              for _ in range(5)]
+
+    assert len(purge._plans) == 3
+    # The oldest are evicted; the newest still executes.
+    assert client.post("/api/admin/library/purge",
+                       json={"token": tokens[0]}).status_code == 409
+    assert client.post("/api/admin/library/purge",
+                       json={"token": tokens[-1]}).status_code == 200
+
+
 def test_purge_rejects_stale_plan_after_library_changes(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     root = tmp_path / "imgs"

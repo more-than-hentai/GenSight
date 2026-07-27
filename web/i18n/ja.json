@@ -198,6 +198,7 @@
   "settings.purgeDone": "整理された記録",
   "settings.purgeScope": "対象パス",
   "settings.purgeTargets": "整理対象",
+  "settings.purgeScopeTotal": "パス内の全体",
   "settings.purgePresent": "ファイルあり",
   "settings.purgeMissing": "ファイルなし",
   "settings.purgeInaccessible": "読み取り失敗",
