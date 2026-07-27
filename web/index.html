@@ -218,6 +218,50 @@
         라이브러리에 아직 없는 파일도 이 경로 하위라면 이미지 표시가 허용됩니다.
         등록하지 않은 경로도 스캔은 가능합니다.
       </p>
+      <p class="hint note" data-i18n="settings.dirsCatalogNote">등록을 해제해도
+        이미 스캔된 기록은 라이브러리에 남습니다 — 기록까지 지우려면 각 항목의
+        "기록 정리"를 사용하세요.</p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.purge">기록 정리</h2>
+      <div class="row wrap">
+        <input type="text" id="purgeRoot" class="grow"
+               data-i18n-ph="settings.purgeRootPlaceholder"
+               placeholder="정리할 경로 (라이브러리에 남은 경로도 가능)">
+        <select id="purgeMode">
+          <option value="all" data-i18n="settings.purgeModeAll">이 경로의 모든 기록</option>
+          <option value="missing" data-i18n="settings.purgeModeMissing">파일이 사라진 기록만</option>
+        </select>
+        <label><input type="checkbox" id="purgeRecursive" checked>
+          <span data-i18n="scan.recursive">하위 폴더 포함</span></label>
+        <button id="purgePreview" data-i18n="settings.purgePreview">미리보기</button>
+        <button id="purgeRun" class="hidden" data-i18n="settings.purgeRun">정리 실행</button>
+      </div>
+      <pre id="purgeResult" class="hidden org-result"></pre>
+      <p class="hint" data-i18n="settings.purgeHint">
+        파일은 삭제하지 않고 라이브러리 기록만 정리합니다. 기록은 아카이브로
+        옮겨져 복구할 수 있고, 같은 경로를 다시 스캔하면 태그·품질이 재계산 없이
+        되살아납니다.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings.archive">아카이브</h2>
+      <div class="row wrap">
+        <span id="archiveStatus" class="hint"></span>
+        <span class="spacer"></span>
+        <label data-i18n="settings.archiveRetention">보존 기간(일)</label>
+        <input type="number" id="archiveRetention" min="0" max="3650" class="num">
+        <button id="archiveSaveRetention" data-i18n="settings.save">설정 저장</button>
+        <button id="archivePruneExpired" data-i18n="settings.archivePruneExpired">만료분 정리</button>
+        <button id="archivePruneAll" data-i18n="settings.archivePruneAll">전체 삭제</button>
+      </div>
+      <ul id="archiveBatches" class="dir-list"></ul>
+      <p class="hint" data-i18n="settings.archiveHint">
+        보존 기간이 지난 항목은 자동으로 정리됩니다(0 = 수동으로만 정리).
+        전체 삭제는 되돌릴 수 없습니다.
+      </p>
     </div>
 
     <div class="card">

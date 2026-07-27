@@ -30,6 +30,7 @@ class SettingsPatch(BaseModel):
     gpu: dict | None = None
     page_size: int | None = None
     quality: dict | None = None
+    archive: dict | None = None
 
 
 class DirectoryBody(BaseModel):

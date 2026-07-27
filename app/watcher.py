@@ -65,6 +65,9 @@ class WatchManager:
         # watch_id -> (observer, signature) so config changes recreate it
         self._observers: dict[int, tuple[object, tuple]] = {}
         self.last_error: str | None = None
+        # Start at 0 so the first tick applies retention immediately —
+        # a restart should not postpone expiry by another hour.
+        self._last_archive_prune = 0.0
 
     # -- public API --------------------------------------------------
 
@@ -116,11 +119,40 @@ class WatchManager:
                     if not w["enabled"]:
                         continue
                     if (w["last_scan"] or 0) + w["poll_interval"] <= now:
-                        self._sweep(w)
+                        # Isolated per watch: one bad directory (gone,
+                        # unreadable, or a root this build cannot scope)
+                        # must not stop the remaining watches or the
+                        # retention prune below.
+                        try:
+                            self._sweep(w)
+                        except Exception as e:  # noqa: BLE001
+                            self.last_error = f"{type(e).__name__}: {e}"
+                            logger.exception("watch sweep failed for %s",
+                                             w.get("directory"))
+                self._prune_archive(now)
                 self.last_error = None
             except Exception as e:  # noqa: BLE001 - keep the loop alive
                 self.last_error = f"{type(e).__name__}: {e}"
                 logger.exception("watcher tick failed")
+
+    def _prune_archive(self, now: float) -> None:
+        """Apply the archive retention window, at most hourly.
+
+        Rides this existing tick rather than adding a scheduler thread —
+        purged records must not accumulate forever, but the exact moment
+        they expire does not matter.
+        """
+        if now - self._last_archive_prune < 3600.0:
+            return
+        try:
+            from . import purge
+
+            purge.prune_expired()
+            # Stamped only on success: advancing first would turn a
+            # transient SQLite error into an hour-long gap.
+            self._last_archive_prune = now
+        except Exception:  # noqa: BLE001 - retention is best-effort
+            logger.exception("archive retention prune failed")
 
     def _sync_observers(self, watches: list[dict]) -> None:
         if not HAVE_WATCHDOG:
@@ -177,11 +209,15 @@ class WatchManager:
         if not root.is_dir():
             db.touch_watch(watch["id"])
             return
-        known = db.known_mtimes(str(root))
+        recursive = bool(watch["recursive"])
+        # The scope must match what the walker below actually visits. Asking
+        # for every descendant row while only walking the immediate children
+        # makes subdirectory rows look absent on every sweep.
+        known = db.known_mtimes(str(root), recursive=recursive)
         processed = 0
         walker = (
             os.walk(root, onerror=lambda e: None)
-            if watch["recursive"]
+            if recursive
             else [(str(root), [], [p.name for p in root.iterdir() if p.is_file()])]
         )
         now = time.time()

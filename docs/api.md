@@ -31,7 +31,7 @@ Base URL: `http://127.0.0.1:8090`
 |---|---|---|
 | GET | `/api/library?...&directory=...&content_rating=...&sort=key1,key2,key3` | 라이브러리 검색 — `sort`는 다중 정렬 체인 (recent/oldest/mtime_desc/mtime_asc/rating/rating_asc/quality/quality_desc/name/name_desc/size_desc/size_asc), `content_rating`은 PG/PG-13/R/X/unrated |
 | GET | `/api/library/export?format=json\|csv&필터...` | 필터 적용 라이브러리 내보내기 |
-| POST | `/api/library/cleanup` | 누락 파일 행 + 고아 썸네일 캐시 정리 |
+| POST | `/api/library/cleanup` | 누락 파일 행을 아카이브로 옮기고 고아 썸네일 캐시 정리 (읽을 수 없는 파일의 행은 보존) |
 | GET | `/api/image?path=...&thumb=true\|false` | 이미지/썸네일 서빙 (허용 경로 하위만) |
 
 > 구 버전의 `/api/jobs/{id}/results`, `/api/jobs/{id}/export`는
@@ -83,13 +83,51 @@ Base URL: `http://127.0.0.1:8090`
 | GET/POST | `/api/auth/users` | 사용자 목록/추가 `{"username","password","role":"admin"\|"user"}` (관리자 전용) |
 | DELETE | `/api/auth/users/{username}` | 사용자 삭제 (본인·마지막 관리자 삭제 불가) |
 
+## 기록 정리 / 아카이브 (관리자 전용)
+
+파괴적 유지보수는 별도 프리픽스 `/api/admin/...`에 있습니다 — 일반 사용자 허용
+목록에 없으므로 **기본 거부**이고, 라우터에 관리자 검사 의존성이 추가로 걸려
+있습니다. 어느 것도 파일을 삭제하지 않습니다.
+
+| Method | Path | 설명 |
+|---|---|---|
+| POST | `/api/admin/library/purge/preview` | `{"root","recursive"?,"mode":"all"\|"missing"}` → 분류 카운트·소실될 작업량·겹치는 등록/감시/스캔 경고 + 단발성 `token` |
+| POST | `/api/admin/library/purge` | `{"token"}` → 아카이브로 이동. 미리보기 이후 다른 쓰기가 있었으면 **409** |
+| GET | `/api/admin/library/archive` | 보관 건수·최고 오래된 항목·만료 건수·배치 목록 |
+| POST | `/api/admin/library/archive/restore` | `{"batch_id"}` → 배치 복구 (태그·품질·그룹·평점 전부) |
+| POST | `/api/admin/library/archive/prune` | `{"all"?}` → 만료분(기본) 또는 전체 영구 삭제 |
+
+거부 조건:
+
+- 토큰 만료(5분)·재사용·미리보기 **시작 시점** 이후 `data_version` 변경 → 409
+  (이 버전은 아카이브 트랜잭션이 쓰기 락을 잡은 뒤 다시 확인됩니다)
+- `mode=missing`인데 **읽기 실패** 행이 있음 → 409 (마운트 해제·권한 오류를
+  파일 없음으로 오판하는 것을 막음)
+- `mode=missing`인데 미리보기 이후 파일이 **다시 나타남** → 409 (실행 직전
+  재확인. DB에 흔적이 없어 버전 검사로는 잡히지 않음)
+- 대상 경로에 실행 중 스캔 또는 **활성 감시** → 409
+- `root`가 상대 경로이거나 `.`·`..` 세그먼트를 포함 → 400.
+  앞뒤 공백은 잘라내지 않고 `padded_root: true`로 알립니다
+
+`archive/restore`는 `{"restored", "skipped", "batch_id"}`를 반환합니다 —
+`skipped`는 같은 경로에 더 새로운 라이브 기록이 있어 덮어쓰지 않은 건수입니다.
+
+보존 기간은 설정 `archive.retention_days`(기본 30, `0` = 수동 정리만)이며 감시
+루프가 시간당 1회 만료분을 정리합니다. 정리한 경로를 재스캔하면 아카이브 행이
+자동 복원되어 태거를 다시 돌리지 않습니다.
+
 ### 역할 (인증 활성화 시)
 
 - **admin**: 전체 접근.
 - **user** (제한 계정, 외부 노출용): 허용 — `/api/library*`(cleanup 제외),
   `/api/stats`, `/api/analyze`, `/api/image`, `/api/i18n`.
   그 외 `/api/*`는 전부 **403** — 설정/스캔/작업/GPU/감시/그룹/휴지통/정리/
-  품질·태깅 실행/사용자 관리 등 경로 입력·시스템 상태 변경 엔드포인트.
+  품질·태깅 실행/사용자 관리/`/api/admin/*` 등 경로 입력·시스템 상태 변경
+  엔드포인트.
+
+허용·거부 판정은 문자열 접두어가 아닌 **경로 세그먼트 경계**로 매칭합니다 —
+`/api/library-admin/...`이 `/api/library` 허용 규칙을 통과하거나
+`/api/library/cleanup-all`이 거부 규칙을 우회하는 일이 없습니다.
 
 `/api/image` 추가 제약:
 
@@ -118,7 +156,8 @@ Base URL: `http://127.0.0.1:8090`
 감사 대상 동작: `app.start`, `auth.*`(login/logout/enable/disable/user_upsert/
 user_delete), `settings.*`, `scan.start|cancel|finish`, `analyze.upload`,
 `watch.*`, `group.*`, `tagger.run|cancel|finish`, `quality.run|cancel|finish`,
-`trash.*`, `organize.apply`, `library.cleanup`.
+`trash.*`, `organize.apply`, `library.cleanup`, `library.purge_preview`,
+`library.purge`, `library.archive_restore`, `library.archive_prune`.
 
 MCP 서버는 [mcp.md](mcp.md), 구조/프레임워크 검토는 [architecture.md](architecture.md) 참조.
 

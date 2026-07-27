@@ -60,10 +60,35 @@ PUBLIC_PREFIXES = (
 )
 
 
+def _prefix_match(path: str, prefix: str) -> bool:
+    """Match on path-segment boundaries, not raw string prefixes.
+
+    Bare startswith() would let "/api/library-admin/purge" pass the
+    "/api/library" allow rule, and "/api/library/cleanup-all" evade the
+    "/api/library/cleanup" deny rule — the segment check removes both.
+    """
+    return path == prefix or path.startswith(prefix.rstrip("/") + "/")
+
+
 def _user_allowed(path: str) -> bool:
-    if any(path.startswith(p) for p in USER_DENIED_PREFIXES):
+    """Whether a restricted (non-admin) session may reach this path.
+
+    Note the asymmetry this creates for new routes: anything added under
+    an allowed prefix such as /api/library is reachable by a `user`
+    account unless it is also denied here. Destructive maintenance
+    endpoints therefore live under /api/admin/... (see
+    routers/admin_library.py), which no allow rule covers, so they are
+    admin-only by default instead of by remembering to deny them.
+    """
+    # A path carrying dot segments matches none of our routes, but it can
+    # still satisfy a prefix test: "/api/library/../admin/library/purge"
+    # passes the /api/library rule. Nothing legitimate needs them, so refuse
+    # rather than let a proxy's normalisation decide authorization.
+    if any(seg in (".", "..") for seg in path.split("/")):
         return False
-    return any(path.startswith(p) for p in USER_ALLOWED_PREFIXES)
+    if any(_prefix_match(path, p) for p in USER_DENIED_PREFIXES):
+        return False
+    return any(_prefix_match(path, p) for p in USER_ALLOWED_PREFIXES)
 
 
 @app.middleware("http")
@@ -84,7 +109,7 @@ async def auth_middleware(request: Request, call_next):
         request.state.auth_role = info[1] if info else None
         request.state.auth_user = info[0] if info else ""
         if path.startswith("/api") and not any(
-            path.startswith(p) for p in PUBLIC_PREFIXES
+            _prefix_match(path, p) for p in PUBLIC_PREFIXES
         ):
             if info is None:
                 return JSONResponse(
