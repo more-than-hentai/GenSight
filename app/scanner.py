@@ -30,6 +30,16 @@ def process_and_store(path: Path | str) -> dict[str, Any]:
     Shared by scan jobs and the folder watcher. Never raises.
     """
     path = Path(path)
+    # A previously purged file coming back (re-registered directory, or an
+    # undone mistake) is restored from the archive first, so the upsert
+    # below refreshes its extracted metadata on top of the preserved
+    # tags/quality/rating instead of starting from a blank row and
+    # requiring another GPU tagging pass.
+    try:
+        if db.restore_archived_path(str(path)):
+            logger.info("restored archived record for %s", path)
+    except Exception:  # noqa: BLE001 - never block ingest on this
+        logger.exception("archive restore failed for %s", path)
     try:
         item = metadata.extract(path)
     except Exception as e:  # noqa: BLE001

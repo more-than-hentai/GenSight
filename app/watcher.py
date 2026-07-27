@@ -65,6 +65,9 @@ class WatchManager:
         # watch_id -> (observer, signature) so config changes recreate it
         self._observers: dict[int, tuple[object, tuple]] = {}
         self.last_error: str | None = None
+        # Start at 0 so the first tick applies retention immediately —
+        # a restart should not postpone expiry by another hour.
+        self._last_archive_prune = 0.0
 
     # -- public API --------------------------------------------------
 
@@ -117,10 +120,28 @@ class WatchManager:
                         continue
                     if (w["last_scan"] or 0) + w["poll_interval"] <= now:
                         self._sweep(w)
+                self._prune_archive(now)
                 self.last_error = None
             except Exception as e:  # noqa: BLE001 - keep the loop alive
                 self.last_error = f"{type(e).__name__}: {e}"
                 logger.exception("watcher tick failed")
+
+    def _prune_archive(self, now: float) -> None:
+        """Apply the archive retention window, at most hourly.
+
+        Rides this existing tick rather than adding a scheduler thread —
+        purged records must not accumulate forever, but the exact moment
+        they expire does not matter.
+        """
+        if now - self._last_archive_prune < 3600.0:
+            return
+        self._last_archive_prune = now
+        try:
+            from . import purge
+
+            purge.prune_expired()
+        except Exception:  # noqa: BLE001 - retention is best-effort
+            logger.exception("archive retention prune failed")
 
     def _sync_observers(self, watches: list[dict]) -> None:
         if not HAVE_WATCHDOG:

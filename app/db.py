@@ -100,6 +100,39 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT NOT NULL DEFAULT 'user',
   version       INTEGER NOT NULL DEFAULT 1
 );
+
+-- Rows removed from `images` are snapshotted here instead of being
+-- destroyed. A row costs bytes; the tags, content rating and quality
+-- score on it cost GPU time, so a purge that turns out to be a mistake
+-- (or a directory that gets re-registered later) must be recoverable
+-- without re-running the tagger. `batch_id` groups one purge so it can
+-- be restored as a unit. Entries older than the configured retention
+-- are pruned (see prune_archive).
+CREATE TABLE IF NOT EXISTS archived_images (
+  path            TEXT PRIMARY KEY,
+  filename        TEXT,
+  mtime           REAL,
+  size            INTEGER,
+  tool            TEXT,
+  prompt          TEXT,
+  negative_prompt TEXT,
+  params          TEXT,
+  phash           TEXT,
+  error           TEXT,
+  rating          INTEGER,
+  favorite        INTEGER,
+  group_name      TEXT,
+  tags            TEXT,
+  scanned_at      REAL,
+  quality_score   REAL,
+  quality_issues  TEXT,
+  content_rating  TEXT,
+  archived_at     REAL NOT NULL,
+  archived_reason TEXT,
+  batch_id        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_archived_batch ON archived_images(batch_id);
+CREATE INDEX IF NOT EXISTS idx_archived_at    ON archived_images(archived_at);
 """
 
 # Columns added after the initial release; applied via ALTER TABLE so
@@ -274,11 +307,42 @@ def get_image(path: str) -> dict | None:
     return _row_to_item(row) if row else None
 
 
-def known_mtimes(prefix: str) -> dict[str, float]:
+def path_scope(root: str, recursive: bool = True) -> tuple[str, list]:
+    """SQL fragment + args selecting the rows stored under `root`.
+
+    Deliberately avoids LIKE/GLOB. A bound LIKE parameter is still
+    interpreted as a pattern, so a directory literally named `a_b` also
+    matches `axb`, and one containing `%` matches anything — fine for a
+    filter, unacceptable for a DELETE. SQLite's LIKE is also
+    ASCII-case-insensitive, which disagrees with the filesystem. Literal
+    `substr()` comparison sidesteps all of it.
+
+    `recursive=False` additionally excludes deeper paths: a
+    non-recursive scan only ever visits the root's immediate children,
+    so reconciling it against every descendant row would misclassify
+    subdirectory rows as missing.
+
+    Raises ValueError on an empty root — an unbounded scope is never
+    what a caller of this function means.
+    """
+    root = str(root or "").rstrip("/")
+    if not root:
+        raise ValueError("path_scope requires a non-empty root")
+    prefix = root + "/"
+    # substr(path, 1, N) = prefix  →  "path starts with prefix", literally.
+    clause = f"substr(path, 1, {len(prefix)}) = ?"
+    args: list = [prefix]
+    if not recursive:
+        # No further separator after the prefix = an immediate child.
+        clause += f" AND instr(substr(path, {len(prefix) + 1}), '/') = 0"
+    return clause, args
+
+
+def known_mtimes(prefix: str, recursive: bool = True) -> dict[str, float]:
     """path -> mtime for all images under a directory (for incremental scans)."""
+    clause, args = path_scope(prefix, recursive)
     rows = connect().execute(
-        "SELECT path, mtime FROM images WHERE path LIKE ?",
-        (prefix.rstrip("/") + "/%",),
+        f"SELECT path, mtime FROM images WHERE {clause}", args
     ).fetchall()
     return {r["path"]: r["mtime"] or 0 for r in rows}
 
@@ -298,8 +362,9 @@ def query_images(
 ) -> tuple[int, list[dict]]:
     where, args = [], []
     if directory:
-        where.append("path LIKE ?")
-        args.append(str(directory).rstrip("/") + "/%")
+        clause, scope_args = path_scope(directory)
+        where.append(clause)
+        args.extend(scope_args)
     if content_rating == "unrated":
         where.append("content_rating IS NULL")
     elif content_rating:
@@ -460,15 +525,31 @@ def summary() -> dict:
 
 
 def cleanup_missing() -> int:
-    """Drop library rows whose files no longer exist on disk."""
+    """Archive library rows whose files no longer exist on disk.
+
+    Rows are snapshotted into archived_images rather than deleted: the
+    tags and quality scores on them cost GPU time, and this used to be a
+    hard DELETE driven by Path.exists(), which also reports False for an
+    unreadable parent or an offline mount. Anything that merely cannot be
+    stat'd is now left alone; only a definitive "not there" is archived.
+    """
+    import os
+    import uuid as _uuid
+
     conn = connect()
-    rows = conn.execute("SELECT path FROM images").fetchall()
-    gone = [(r["path"],) for r in rows if not Path(r["path"]).exists()]
-    with conn:
-        conn.executemany("DELETE FROM images WHERE path=?", gone)
-    if gone:
-        bump_version()
-    return len(gone)
+    rows = [r["path"] for r in conn.execute("SELECT path FROM images").fetchall()]
+    gone = []
+    for p in rows:
+        try:
+            os.stat(p)
+        except (FileNotFoundError, NotADirectoryError):
+            gone.append(p)
+        except OSError:
+            continue  # unreadable, not provably absent — keep the row
+    if not gone:
+        return 0
+    return archive_rows(gone, "cleanup: file missing on disk",
+                        _uuid.uuid4().hex[:12])
 
 
 def group_names() -> list[str]:
@@ -837,3 +918,130 @@ def delete_user_row(username: str) -> str:
             "SELECT 1 FROM users WHERE username=?", (username,)
         ).fetchone()
     return "last_admin" if exists else "not_found"
+
+
+# ---------------------------------------------------------------- archive
+
+# Columns copied verbatim between `images` and `archived_images`. Kept as
+# one list so a future schema migration cannot silently drop a column
+# from the snapshot (which would look like successful archiving while
+# quietly losing tags or quality on restore).
+_ARCHIVE_COLUMNS = (
+    "path", "filename", "mtime", "size", "tool", "prompt", "negative_prompt",
+    "params", "phash", "error", "rating", "favorite", "group_name", "tags",
+    "scanned_at", "quality_score", "quality_issues", "content_rating",
+)
+
+
+def archive_rows(paths: list[str], reason: str, batch_id: str) -> int:
+    """Move rows from `images` into `archived_images` atomically.
+
+    INSERT..SELECT then DELETE inside one transaction: a partial archive
+    would either lose rows outright or leave them duplicated in both
+    tables, and both are worse than failing the whole operation.
+    """
+    if not paths:
+        return 0
+    cols = ", ".join(_ARCHIVE_COLUMNS)
+    conn = connect()
+    archived = 0
+    with conn:
+        # Chunked to stay under SQLite's bound-parameter limit on a
+        # large purge, but all chunks share the one transaction.
+        for i in range(0, len(paths), 500):
+            chunk = paths[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            conn.execute(
+                f"""INSERT OR REPLACE INTO archived_images
+                    ({cols}, archived_at, archived_reason, batch_id)
+                    SELECT {cols}, ?, ?, ? FROM images
+                    WHERE path IN ({marks})""",
+                [time.time(), reason, batch_id, *chunk],
+            )
+            cur = conn.execute(
+                f"DELETE FROM images WHERE path IN ({marks})", chunk
+            )
+            archived += cur.rowcount or 0
+    if archived:
+        bump_version()
+    return archived
+
+
+def get_archived(path: str) -> dict | None:
+    row = connect().execute(
+        "SELECT * FROM archived_images WHERE path=?", (path,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def restore_archived(batch_id: str) -> int:
+    """Put a whole purge batch back into `images`, one transaction."""
+    cols = ", ".join(_ARCHIVE_COLUMNS)
+    conn = connect()
+    with conn:
+        cur = conn.execute(
+            f"""INSERT OR REPLACE INTO images ({cols})
+                SELECT {cols} FROM archived_images WHERE batch_id=?""",
+            (batch_id,),
+        )
+        restored = cur.rowcount or 0
+        conn.execute("DELETE FROM archived_images WHERE batch_id=?", (batch_id,))
+    if restored:
+        bump_version()
+    return restored
+
+
+def restore_archived_path(path: str) -> bool:
+    """Reactivate one archived row — used when a purged file is scanned
+    again, so its tags/quality/rating come back instead of the enrichment
+    being recomputed on the GPU."""
+    cols = ", ".join(_ARCHIVE_COLUMNS)
+    conn = connect()
+    with conn:
+        cur = conn.execute(
+            f"""INSERT OR REPLACE INTO images ({cols})
+                SELECT {cols} FROM archived_images WHERE path=?""",
+            (path,),
+        )
+        if not cur.rowcount:
+            return False
+        conn.execute("DELETE FROM archived_images WHERE path=?", (path,))
+    bump_version()
+    return True
+
+
+def archive_summary() -> dict:
+    conn = connect()
+    row = conn.execute(
+        "SELECT COUNT(*) c, MIN(archived_at) oldest, MAX(archived_at) newest"
+        " FROM archived_images"
+    ).fetchone()
+    batches = [dict(r) for r in conn.execute(
+        """SELECT batch_id, archived_reason, COUNT(*) rows,
+                  MIN(archived_at) archived_at
+           FROM archived_images GROUP BY batch_id
+           ORDER BY archived_at DESC LIMIT 50"""
+    ).fetchall()]
+    return {"total": row["c"], "oldest": row["oldest"],
+            "newest": row["newest"], "batches": batches}
+
+
+def prune_archive(before_ts: float | None = None) -> int:
+    """Delete archived rows permanently. `before_ts=None` wipes all."""
+    conn = connect()
+    with conn:
+        if before_ts is None:
+            cur = conn.execute("DELETE FROM archived_images")
+        else:
+            cur = conn.execute(
+                "DELETE FROM archived_images WHERE archived_at < ?",
+                (float(before_ts),),
+            )
+    return cur.rowcount or 0
+
+
+def count_archived_before(before_ts: float) -> int:
+    return connect().execute(
+        "SELECT COUNT(*) c FROM archived_images WHERE archived_at < ?",
+        (float(before_ts),),
+    ).fetchone()["c"]

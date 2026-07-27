@@ -111,21 +111,60 @@ async function renderSettings() {
   list.innerHTML = "";
   for (const d of s.directories) {
     const li = document.createElement("li");
-    li.textContent = "📁 " + d;
+    const label = document.createElement("span");
+    label.className = "grow";
+    label.textContent = "📁 " + d;
+    li.appendChild(label);
+
+    const purgeBtn = document.createElement("button");
+    purgeBtn.textContent = t("settings.purgeRecords", "기록 정리");
+    purgeBtn.onclick = () => {
+      // Prefill the purge card rather than acting immediately — the
+      // preview is what makes this safe.
+      $("#purgeRoot").value = d;
+      $("#purgeMode").value = "all";
+      $("#purgePreview").click();
+      $("#purgeRoot").scrollIntoView({ block: "center" });
+    };
     const del = document.createElement("button");
     del.textContent = t("settings.remove", "삭제");
     del.onclick = async () => {
-      await api.send("DELETE", `/api/settings/directories?path=${encodeURIComponent(d)}`);
-      renderSettings();
+      // Unregistering leaves the catalog alone; say so with the real
+      // number instead of letting the records silently linger.
+      let rows = null;
+      try {
+        rows = (await api.get(
+          `/api/library?limit=1&directory=${encodeURIComponent(d)}`)).total;
+      } catch { /* fall back to the generic warning */ }
+      const msg = rows
+        ? t("settings.dirRemoveConfirmRows",
+            "등록을 해제합니다. 이 경로의 라이브러리 기록 {n}개는 그대로 남습니다 — 계속할까요?")
+            .replace("{n}", rows)
+        : t("settings.dirRemoveConfirm", "이 디렉토리 등록을 해제할까요?");
+      if (!confirm(msg)) return;
+      try {
+        await api.send("DELETE",
+          `/api/settings/directories?path=${encodeURIComponent(d)}`);
+        if (rows) {
+          toast(t("settings.dirRemovedRecordsKept",
+                  "등록 해제됨 — 기록은 남아 있습니다. '기록 정리'로 지울 수 있습니다"));
+          $("#purgeRoot").value = d;
+        }
+        renderSettings();
+      } catch (e) { toast(e.message, true); }
     };
-    li.appendChild(del);
+    li.append(purgeBtn, del);
     list.appendChild(li);
   }
+
+  $("#archiveRetention").value =
+    (s.archive && s.archive.retention_days) ?? 30;
 
   renderWatches();
   renderGroups();
   renderTagger();
   renderQuality();
+  renderArchive();
   renderAuth();
 
   try {
@@ -506,6 +545,159 @@ async function doLogin() {
     el.classList.remove("hidden");
   }
 }
+
+/* -------- record purge (preview -> execute) -------- */
+
+// Holds the token from the last preview. Cleared whenever the inputs
+// change so a stale plan can never be executed by accident.
+let purgeToken = null;
+
+function resetPurgePlan() {
+  purgeToken = null;
+  $("#purgeRun").classList.add("hidden");
+}
+["#purgeRoot", "#purgeMode", "#purgeRecursive"].forEach((sel) => {
+  $(sel).addEventListener("input", resetPurgePlan);
+  $(sel).addEventListener("change", resetPurgePlan);
+});
+
+$("#purgePreview").onclick = async () => {
+  const root = $("#purgeRoot").value.trim();
+  if (!root) {
+    toast(t("settings.purgeNeedRoot", "정리할 경로를 입력하세요"), true);
+    return;
+  }
+  resetPurgePlan();
+  const box = $("#purgeResult");
+  try {
+    const p = await api.send("POST", "/api/admin/library/purge/preview", {
+      root, recursive: $("#purgeRecursive").checked, mode: $("#purgeMode").value,
+    });
+    purgeToken = p.token;
+    const risk = p.at_risk;
+    const lines = [
+      `${t("settings.purgeScope", "대상 경로")}: ${p.root}` +
+        (p.recursive ? "" : ` (${t("settings.noRecursive", "하위 폴더 제외")})`),
+      `${t("settings.purgeTargets", "정리 대상")}: ${p.targets} / ` +
+        `${t("results.count", "결과")} ${p.total}`,
+      `  ${t("settings.purgePresent", "파일 있음")}: ${p.present}` +
+        `   ${t("settings.purgeMissing", "파일 없음")}: ${p.missing}` +
+        `   ${t("settings.purgeInaccessible", "읽기 실패")}: ${p.inaccessible}`,
+      `${t("settings.purgeAtRisk", "함께 사라지는 작업 결과")}:`,
+      `  ${t("settings.purgeRiskTags", "태그")}: ${risk.tagged}` +
+        `   ${t("settings.purgeRiskQuality", "품질")}: ${risk.quality_analysed}` +
+        `   ${t("settings.purgeRiskGroup", "그룹")}: ${risk.grouped}` +
+        `   ★ ${risk.rated}   ♥ ${risk.favorite}`,
+      `${t("settings.purgeFilesUntouched", "삭제되는 파일")}: ${p.files_deleted}`,
+    ];
+    const ov = p.overlaps;
+    if (ov.active_scans.length) {
+      lines.push(`⚠ ${t("settings.purgeActiveScan", "이 경로에 스캔이 실행 중입니다")}`);
+    }
+    if (ov.watches.length) {
+      lines.push(`⚠ ${t("settings.purgeWatched", "감시 중인 경로")}: ` +
+        ov.watches.map((w) => w.directory).join(", "));
+    }
+    box.textContent = lines.join("\n");
+    box.classList.remove("hidden");
+    if (p.targets > 0) $("#purgeRun").classList.remove("hidden");
+    else toast(t("settings.purgeNothing", "정리할 기록이 없습니다"));
+  } catch (e) {
+    box.classList.add("hidden");
+    toast(e.message, true);
+  }
+};
+
+$("#purgeRun").onclick = async () => {
+  if (!purgeToken) {
+    toast(t("settings.purgeNeedPreview", "먼저 미리보기를 실행하세요"), true);
+    return;
+  }
+  if (!confirm(t("settings.purgeConfirm",
+                 "미리보기 내용대로 라이브러리 기록을 정리할까요? (파일은 삭제되지 않고, 아카이브에서 복구할 수 있습니다)"))) {
+    return;
+  }
+  try {
+    const r = await api.send("POST", "/api/admin/library/purge",
+                             { token: purgeToken });
+    toast(`${t("settings.purgeDone", "정리된 기록")}: ${r.archived}`);
+    resetPurgePlan();
+    $("#purgeResult").classList.add("hidden");
+    renderArchive();
+  } catch (e) {
+    // 409 = the plan no longer matches the library; force a re-preview.
+    resetPurgePlan();
+    toast(e.message, true);
+  }
+};
+
+/* -------- archive -------- */
+
+async function renderArchive() {
+  let s;
+  try { s = await api.get("/api/admin/library/archive"); } catch { return; }
+  const parts = [`${t("settings.archiveStored", "보관 중")}: ${s.total}`];
+  if (s.oldest) {
+    parts.push(`${t("settings.archiveOldest", "가장 오래된 항목")}: ` +
+      new Date(s.oldest * 1000).toLocaleDateString());
+  }
+  if (s.expired) {
+    parts.push(`${t("settings.archiveExpired", "만료됨")}: ${s.expired}`);
+  }
+  $("#archiveStatus").textContent = parts.join(" · ");
+
+  const box = $("#archiveBatches");
+  box.innerHTML = "";
+  for (const b of s.batches) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "grow";
+    label.textContent =
+      `🗄 ${new Date(b.archived_at * 1000).toLocaleString()} · ` +
+      `${b.rows}${t("lib.files", "개 파일")} · ${b.archived_reason || ""}`;
+    const restore = document.createElement("button");
+    restore.textContent = t("lib.restore", "복구");
+    restore.onclick = async () => {
+      try {
+        const r = await api.send("POST", "/api/admin/library/archive/restore",
+                                 { batch_id: b.batch_id });
+        toast(`${t("lib.restored", "복구되었습니다")}: ${r.restored}`);
+        renderArchive();
+      } catch (e) { toast(e.message, true); }
+    };
+    li.append(label, restore);
+    box.appendChild(li);
+  }
+}
+
+$("#archiveSaveRetention").onclick = async () => {
+  try {
+    await api.send("PUT", "/api/settings",
+      { archive: { retention_days: +$("#archiveRetention").value } });
+    toast(t("toast.saved", "설정이 저장되었습니다"));
+    renderArchive();
+  } catch (e) { toast(e.message, true); }
+};
+
+$("#archivePruneExpired").onclick = async () => {
+  try {
+    const r = await api.send("POST", "/api/admin/library/archive/prune",
+                             { all: false });
+    toast(`${t("lib.purged", "영구 삭제됨")}: ${r.removed}`);
+    renderArchive();
+  } catch (e) { toast(e.message, true); }
+};
+
+$("#archivePruneAll").onclick = async () => {
+  if (!confirm(t("settings.archivePruneAllConfirm",
+                 "아카이브를 전부 영구 삭제할까요? 복구할 수 없습니다."))) return;
+  try {
+    const r = await api.send("POST", "/api/admin/library/archive/prune",
+                             { all: true });
+    toast(`${t("lib.purged", "영구 삭제됨")}: ${r.removed}`);
+    renderArchive();
+  } catch (e) { toast(e.message, true); }
+};
 
 $("#cleanupMissing").onclick = async () => {
   try {

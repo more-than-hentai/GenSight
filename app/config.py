@@ -45,6 +45,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # (roughly doubles per-file decode cost; off by default)
         "auto": False,
     },
+    "archive": {
+        # Purged library rows are snapshotted into archived_images rather
+        # than deleted, so a mistaken purge does not throw away tags and
+        # quality scores that cost GPU time. They are not kept forever:
+        # entries older than this are pruned automatically (0 = keep
+        # until pruned by hand from the settings UI).
+        "retention_days": 30,
+    },
     "auth": {
         # Optional session auth; managed via /api/auth/*. Accounts
         # (salts/hashes) live in the SQLite `users` table (see
