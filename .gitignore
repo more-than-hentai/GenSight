@@ -8,11 +8,18 @@ venv/
 
 # App data (settings, thumbnail cache)
 data/
+# Preview/dev instance data — kept separate from data/ so a second process
+# never runs a second folder watcher against the real library.
+data-preview/
 
-# OS / editor
+# OS / editor / local tooling
 .DS_Store
 .idea/
 .vscode/
+# Claude Code's preview-server config: local dev scaffolding (ports, data dir),
+# same category as .vscode/. Other .claude/ files can still be committed if a
+# project ever wants to share them.
+.claude/launch.json
 
 # Codex/gstack scratch
 .gstack/
