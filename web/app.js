@@ -46,6 +46,15 @@ async function err(r) {
   return new Error(d || `HTTP ${r.status}`);
 }
 
+/* ---------------------------------------------------------- viewport */
+
+// The breakpoint lives in style.css (`--phone`), not here. Duplicating the
+// pixel width in both languages is how the two drift apart.
+function isPhone() {
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue("--phone").trim() === "1";
+}
+
 /* ---------------------------------------------------------- i18n */
 
 function t(key, fallback) {
@@ -100,8 +109,26 @@ function renderScanDirs() {
   $("#scanWorkers").value = state.settings.workers.extract;
 }
 
+// 11 cards run to ~4800px, which is six phone screens of uninterrupted
+// scrolling. Collapse them once per session so the tab opens as a list of
+// headings; the user's own expansions then stick for the rest of the visit.
+function collapseSettingsOnPhone() {
+  const section = $("#tab-settings");
+  if (section.dataset.collapsed || !isPhone()) return;
+  section.dataset.collapsed = "1";
+  $$("#tab-settings details.card").forEach((d) => { d.open = false; });
+}
+
+// The purge card is driven from outside itself (the directory list prefills the
+// root and fires the preview). Inside a collapsed <details> that scroll is a
+// no-op and the preview would run where nobody can see it.
+function revealPurgeCard() {
+  $("#purgeRoot").closest("details")?.setAttribute("open", "");
+}
+
 async function renderSettings() {
   await loadSettings();
+  collapseSettingsOnPhone();
   const s = state.settings;
   $("#setScanWorkers").value = s.workers.scan;
   $("#setExtractWorkers").value = s.workers.extract;
@@ -123,6 +150,7 @@ async function renderSettings() {
     purgeBtn.onclick = () => {
       // Prefill the purge card rather than acting immediately — the
       // preview is what makes this safe.
+      revealPurgeCard();
       $("#purgeRoot").value = d;
       $("#purgeMode").value = "all";
       $("#purgePreview").click();
@@ -150,6 +178,7 @@ async function renderSettings() {
         if (rows) {
           toast(t("settings.dirRemovedRecordsKept",
                   "등록 해제됨 — 기록은 남아 있습니다. '기록 정리'로 지울 수 있습니다"));
+          revealPurgeCard();
           $("#purgeRoot").value = d;
         }
         renderSettings();
@@ -962,8 +991,45 @@ function initSortSelects() {
       (i === 0 ? "recent" : "");
     sel.onchange = () => {
       localStorage.setItem(`gensight.sort${i + 1}`, sel.value);
+      updateSortVisibility();
       loadLibrary(true);
     };
+  });
+  updateSortVisibility();
+}
+
+// A third sort level is meaningless until a second one is chosen, and an empty
+// "—" select is noise at every width, not just on phones.
+function updateSortVisibility() {
+  $("#libSort3").classList.toggle("hidden", !$("#libSort2").value);
+}
+
+// How many filters are actually narrowing the view. Shown on the collapsed
+// disclosure so a folded filter set can never silently hide its own state.
+function activeFilterCount() {
+  let n = 0;
+  for (const id of ["#libTool", "#libGroup", "#libQuality", "#libCRating"]) {
+    if ($(id).value) n += 1;
+  }
+  if (+$("#libRating").value > 0) n += 1;
+  if ($("#libFav").classList.contains("on")) n += 1;
+  return n;
+}
+
+function renderFilterCount() {
+  const n = activeFilterCount();
+  const chip = $("#libFilterCount");
+  chip.textContent = n ? String(n) : "";
+  chip.classList.toggle("hidden", n === 0);
+}
+
+function initFilterDisclosure() {
+  const d = $("#libFilters");
+  const saved = localStorage.getItem("gensight.filtersOpen");
+  // Markup ships `open`; phones start collapsed unless the user said otherwise.
+  d.open = saved !== null ? saved === "1" : !isPhone();
+  d.addEventListener("toggle", () => {
+    localStorage.setItem("gensight.filtersOpen", d.open ? "1" : "0");
   });
 }
 
@@ -1002,6 +1068,7 @@ function libParams() {
 
 async function loadLibrary(reset) {
   updateDirChip();
+  renderFilterCount();
   if (lib.trash) { $("#libPager").innerHTML = ""; loadTrash(); return; }
   if (lib.dupes) { $("#libPager").innerHTML = ""; loadDuplicates(); return; }
   if (reset) lib.page = 1;
@@ -1261,6 +1328,7 @@ async function openLibraryDetail(path) {
 $("#libTool").onchange = $("#libRating").onchange = $("#libQuality").onchange =
 $("#libGroup").onchange = $("#libCRating").onchange = () => loadLibrary(true);
 initSortSelects();
+initFilterDisclosure();
 $("#libPageSize").value = String(lib.size);
 $("#libPageSize").onchange = (e) => {
   lib.size = +e.target.value;

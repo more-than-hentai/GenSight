@@ -76,6 +76,15 @@ def test_every_markup_key_exists_in_every_language():
         assert not missing, f"{lang}.json is missing {missing}"
 
 
+def test_catalogues_have_identical_key_order():
+    """The convention is that a new key goes in at the same position in all
+    three files. Set equality alone would let the files drift out of order,
+    making every future diff harder to read than it needs to be."""
+    base = list(_catalog("ko"))
+    for lang in LANGS:
+        assert list(_catalog(lang)) == base, f"{lang}.json key order differs"
+
+
 def test_catalogues_have_identical_key_sets():
     sets = {lang: set(_catalog(lang)) for lang in LANGS}
     base = sets["ko"]

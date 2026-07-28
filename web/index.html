@@ -80,6 +80,20 @@
       <div class="row wrap">
         <input type="search" id="libSearch" data-i18n-ph="results.search"
                placeholder="프롬프트/파일명/모델 검색">
+        <span class="spacer"></span>
+        <span id="libDirChip" class="tool-badge dir-chip hidden" title="디렉토리 필터 (클릭하여 해제)"></span>
+        <span id="libCount" class="hint"></span>
+      </div>
+      <!-- Ships `open`, so if the phone-collapse JS ever fails the layout
+           degrades to today's, never to something worse. The summary carries
+           no data-i18n itself — a translated element must not contain
+           another (see tests/test_i18n_markup.py). -->
+      <details id="libFilters" class="filters" open>
+      <summary>
+        <span data-i18n="lib.filters">필터</span>
+        <span id="libFilterCount" class="tool-badge hidden"></span>
+      </summary>
+      <div class="row wrap">
         <select id="libTool">
           <option value="" data-i18n="results.allTools">전체 도구</option>
           <option value="a1111">A1111/Forge</option>
@@ -123,9 +137,6 @@
         <button id="libTrash" data-i18n="lib.trash">휴지통</button>
         <button id="libExportJson">JSON ⬇</button>
         <button id="libExportCsv">CSV ⬇</button>
-        <span class="spacer"></span>
-        <span id="libDirChip" class="tool-badge dir-chip hidden" title="디렉토리 필터 (클릭하여 해제)"></span>
-        <span id="libCount" class="hint"></span>
       </div>
       <div class="row wrap">
         <label class="hint" data-i18n="lib.sortLabel">정렬</label>
@@ -133,6 +144,7 @@
         <select id="libSort2"></select>
         <select id="libSort3"></select>
       </div>
+      </details>
     </div>
     <div id="libGrid" class="grid"></div>
     <div id="libPager" class="pager"></div>
@@ -201,8 +213,8 @@
 
   <!-- ============================ Settings tab -->
   <section id="tab-settings" class="panel">
-    <div class="card">
-      <h2 data-i18n="settings.dirs">스캔 디렉토리</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.dirs">스캔 디렉토리</h2></summary>
       <div class="row">
         <input type="text" id="newDir" data-i18n-ph="settings.dirPlaceholder"
                placeholder="/path/to/images" class="grow">
@@ -221,10 +233,10 @@
       <p class="hint note" data-i18n="settings.dirsCatalogNote">등록을 해제해도
         이미 스캔된 기록은 라이브러리에 남습니다 — 기록까지 지우려면 각 항목의
         "기록 정리"를 사용하세요.</p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.purge">기록 정리</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.purge">기록 정리</h2></summary>
       <div class="row wrap">
         <input type="text" id="purgeRoot" class="grow"
                data-i18n-ph="settings.purgeRootPlaceholder"
@@ -244,10 +256,10 @@
         옮겨져 복구할 수 있고, 같은 경로를 다시 스캔하면 태그·품질이 재계산 없이
         되살아납니다.
       </p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.archive">아카이브</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.archive">아카이브</h2></summary>
       <div class="row wrap">
         <span id="archiveStatus" class="hint"></span>
         <span class="spacer"></span>
@@ -262,10 +274,10 @@
         보존 기간이 지난 항목은 자동으로 정리됩니다(0 = 수동으로만 정리).
         전체 삭제는 되돌릴 수 없습니다.
       </p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.workers">워커 / 동시성</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.workers">워커 / 동시성</h2></summary>
       <div class="settings-grid">
         <label data-i18n="settings.scanWorkers">스캔 워커</label>
         <input type="number" id="setScanWorkers" min="1" max="32" class="num">
@@ -277,10 +289,10 @@
         <input type="number" id="setMaxJobs" min="1" max="8" class="num">
       </div>
       <p class="hint" id="cpuInfo"></p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.watches">폴더 자동 감시</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.watches">폴더 자동 감시</h2></summary>
       <div class="row wrap">
         <input type="text" id="watchDir" class="grow"
                data-i18n-ph="settings.dirPlaceholder" placeholder="/path/to/images">
@@ -292,10 +304,10 @@
       </div>
       <ul id="watchList" class="dir-list"></ul>
       <p class="hint" id="watcherStatus"></p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.groups">그룹 자동 분류</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.groups">그룹 자동 분류</h2></summary>
       <div class="row wrap">
         <input type="text" id="groupName" data-i18n-ph="settings.groupName" placeholder="그룹명">
         <input type="text" id="groupPattern" class="grow"
@@ -321,10 +333,10 @@
           <span data-i18n="settings.overwrite">기존 그룹 덮어쓰기</span></label>
         <span id="applyResult" class="hint"></span>
       </div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.quality">품질 분석</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.quality">품질 분석</h2></summary>
       <div class="row">
         <button id="qualityRun" class="primary" data-i18n="settings.qualityRun">품질 분석 실행</button>
         <button id="qualityCancel" data-i18n="scan.cancel">취소</button>
@@ -338,10 +350,10 @@
         블러/노출/대비/저해상도 휴리스틱과 생성 설정(낮은 Steps, 극단적 CFG) 기반으로
         0–100 점수와 이슈를 부여합니다. 신체 파손 검출(ML)은 로드맵에 있습니다.
       </p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.organize">파일 정리</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.organize">파일 정리</h2></summary>
       <div class="row wrap">
         <input type="text" id="orgRoot" class="grow"
                data-i18n-ph="settings.orgRoot" placeholder="대상 루트 디렉토리">
@@ -355,10 +367,10 @@
         템플릿 경로로 이동합니다. 변수: {model} {tool} {date} {group} {sampler}
       </p>
       <pre id="orgResult" class="hidden org-result"></pre>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.auth">인증</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.auth">인증</h2></summary>
       <div id="authDisabledBox">
         <div class="row wrap">
           <input type="text" id="authUser" data-i18n-ph="auth.username" placeholder="사용자명" autocomplete="username">
@@ -394,10 +406,10 @@
         활성화하면 모든 API에 로그인이 필요합니다 (localhost 개인 사용 시에는 불필요).
         비밀번호는 scrypt로 해시되어 저장됩니다.
       </p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.tagger">WD Tagger 자동 태깅</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.tagger">WD Tagger 자동 태깅</h2></summary>
       <div class="row">
         <button id="taggerRun" class="primary" data-i18n="settings.taggerRun">태깅 실행</button>
         <button id="taggerCancel" data-i18n="scan.cancel">취소</button>
@@ -407,10 +419,10 @@
         선택 설치 기능입니다: pip install -r requirements-ml.txt (onnxruntime-gpu).
         설정된 GPU에 작업이 분배됩니다.
       </p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2 data-i18n="settings.gpus">GPU (ML 분석용)</h2>
+    <details class="card" open>
+      <summary><h2 data-i18n="settings.gpus">GPU (ML 분석용)</h2></summary>
       <div id="gpuList"></div>
       <div class="settings-grid">
         <label data-i18n="settings.jobsPerGpu">GPU당 동시 작업</label>
@@ -419,7 +431,7 @@
       <p class="hint" data-i18n="settings.gpuHint">
         선택한 GPU는 추후 ML 이미지 분석(카테고리/의상/배경/품질 판별) 작업에 사용됩니다.
       </p>
-    </div>
+    </details>
 
     <div class="row">
       <button id="saveSettings" class="primary" data-i18n="settings.save">설정 저장</button>
@@ -443,12 +455,16 @@
       <div class="modal-meta">
         <div class="copy-bar">
           <span data-i18n="detail.copyAs">복사 형식:</span>
-          <button data-copy="readable" data-i18n="detail.readable">보기</button>
-          <button data-copy="json">JSON</button>
-          <button data-copy="markdown">Markdown</button>
-          <button data-copy="bbcode">BBCode</button>
-          <button data-copy="arca" data-i18n="detail.arca">아카라이브</button>
-          <button data-copy="prompt" data-i18n="detail.promptOnly">프롬프트만</button>
+          <!-- Wrapper so phones can scroll these horizontally in one row
+               instead of wrapping them into three (~88px of screen). -->
+          <div class="copy-formats">
+            <button data-copy="readable" data-i18n="detail.readable">보기</button>
+            <button data-copy="json">JSON</button>
+            <button data-copy="markdown">Markdown</button>
+            <button data-copy="bbcode">BBCode</button>
+            <button data-copy="arca" data-i18n="detail.arca">아카라이브</button>
+            <button data-copy="prompt" data-i18n="detail.promptOnly">프롬프트만</button>
+          </div>
           <button id="viewTable" data-i18n="detail.tableView">표 보기</button>
           <label class="with-image">
             <input type="checkbox" id="copyWithImage">

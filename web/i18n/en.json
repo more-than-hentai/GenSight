@@ -32,6 +32,7 @@
   "lib.allCRatings": "All ratings",
   "lib.crUnrated": "Unrated content",
   "lib.sortLabel": "Sort",
+  "lib.filters": "Filters",
   "lib.nsfwShow": "Click to reveal",
   "sort.recent": "Added (newest)",
   "sort.oldest": "Added (oldest)",
