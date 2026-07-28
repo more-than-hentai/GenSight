@@ -1,4 +1,7 @@
 :root {
+  /* Phone breakpoint, declared once. JS reads this instead of hard-coding the
+     pixel width a second time, so the two can never drift apart. */
+  --phone: 0;
   --bg: #12141a;
   --panel: #1b1e27;
   --panel2: #232734;
@@ -78,8 +81,12 @@ header {
    with no visible way to reach them. */
 nav {
   display: flex; gap: 4px; flex: 1; min-width: 0;
-  overflow-x: auto; scrollbar-width: thin;
+  overflow-x: auto; scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
+/* A hairline scrollbar over a 40px control row is noise; the partially
+   visible next tab is the affordance. */
+nav::-webkit-scrollbar { display: none; }
 .header-right {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
   min-width: 0; justify-content: flex-end;
@@ -96,6 +103,11 @@ nav {
 .tab {
   background: none; border: none; color: var(--muted);
   padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 14px;
+  /* Korean breaks at any character, so a shrunk tab used to collapse to one
+     glyph wide and stack vertically ("라이브러리" as 라/이/브/러/리, 116px
+     tall). nowrap plus a non-shrinking basis makes nav's overflow-x scroll
+     do the job it was added for. */
+  white-space: nowrap; flex: 0 0 auto;
 }
 .tab.active { background: var(--panel2); color: var(--text); }
 main { max-width: 1280px; margin: 0 auto; padding: 20px; }
@@ -107,7 +119,17 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px; }
   border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px;
 }
 .card h2 { margin: 0 0 12px; font-size: 15px; color: var(--accent); }
-.row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+/* Settings cards are <details> so phones can collapse an 11-card, 4800px
+   page into a list of headings. The existing h2 keys become the summaries,
+   so this costs no new translations. */
+details.card > summary { cursor: pointer; list-style-position: outside; }
+details.card > summary h2 { display: inline; margin: 0; }
+details.card[open] > summary { margin-bottom: 12px; }
+/* Wrapping is the default: a non-wrapping row squeezes its children to
+   min-content on a narrow viewport instead of moving them to a second line.
+   Desktop is unaffected because wrapping only engages once the content
+   exceeds the line. `.row.wrap` stays as an alias so no markup changes. */
+.row { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
 .row.wrap { flex-wrap: wrap; }
 .row.center { justify-content: center; }
 .spacer { flex: 1; }
@@ -158,7 +180,12 @@ button.ghost { background: none; border: none; font-size: 16px; }
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   overflow: hidden; cursor: pointer; transition: transform .12s, border-color .12s;
 }
-.item:hover { transform: translateY(-2px); border-color: var(--accent); }
+/* Touch devices latch :hover after a tap, so a tapped card would stay lifted
+   and the .dir-chip strikethrough below would become a permanent, meaningless
+   line. Gate the purely decorative hover states on a real pointer. */
+@media (hover: hover) {
+  .item:hover { transform: translateY(-2px); border-color: var(--accent); }
+}
 .item img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--code-bg); }
 .item .body { padding: 8px 10px; }
 .item .name { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -166,7 +193,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
   font-size: 12.5px; height: 3em; overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
-.item .tools { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+.item .tools { display: flex; gap: 6px; margin-top: 6px; align-items: center; flex-wrap: wrap; }
 .tool-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 20px; background: var(--border2); color: var(--muted); }
 .tool-badge.a1111 { color: var(--warn); }
 .tool-badge.comfyui { color: var(--accent); }
@@ -180,7 +207,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
 }
 .dir-list { list-style: none; padding: 0; margin: 10px 0 0; }
 .dir-list li {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 7px 10px; background: var(--panel2); border-radius: 8px; margin-bottom: 6px;
   word-break: break-all;
 }
@@ -218,12 +245,17 @@ button.ghost { background: none; border: none; font-size: 16px; }
 .modal-head h3 { margin: 0; font-size: 14px; word-break: break-all; }
 .modal-actions { display: flex; gap: 6px; align-items: center; }
 .modal-body {
-  display: grid; grid-template-columns: minmax(200px, 380px) 1fr;
+  /* minmax(0, 1fr), not 1fr: a bare 1fr track floors at its content's
+     min-content width, so one wide child (a nowrap scroll row, an unbreakable
+     token) inflates the track past the modal and the whole body scrolls
+     sideways — taking the image off-centre with it. */
+  display: grid; grid-template-columns: minmax(200px, 380px) minmax(0, 1fr);
   gap: 16px; padding: 16px 18px; overflow: auto;
 }
+.modal-meta { min-width: 0; }
 .modal-body img { width: 100%; border-radius: 10px; }
 /* stacked (상하) layout */
-.modal-body.vertical { grid-template-columns: 1fr; }
+.modal-body.vertical { grid-template-columns: minmax(0, 1fr); }
 .modal-body.vertical img {
   width: auto; max-width: 100%; max-height: 46vh; margin: 0 auto; display: block;
 }
@@ -255,7 +287,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
   white-space: pre-wrap; word-break: break-word; margin: 0;
   max-height: 60vh; overflow: auto;
 }
-@media (max-width: 720px) { .modal-body { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .modal-body { grid-template-columns: minmax(0, 1fr); } }
 
 /* library */
 .toggle-btn.on { border-color: var(--err); color: var(--err); }
@@ -278,7 +310,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
   width: 84px; height: 84px; object-fit: cover; border-radius: 8px;
   cursor: pointer; border: 1px solid var(--border); flex-shrink: 0;
 }
-.similar-strip img:hover { border-color: var(--accent); }
+@media (hover: hover) { .similar-strip img:hover { border-color: var(--accent); } }
 #similarBox h4 { margin: 14px 0 4px; font-size: 13px; color: var(--accent); }
 .dupe-head {
   grid-column: 1 / -1; color: var(--muted); font-size: 12.5px;
@@ -286,11 +318,20 @@ button.ghost { background: none; border: none; font-size: 16px; }
 }
 
 /* stats */
-.stats-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+/* minmax(0, …) for the same reason as .modal-body: a bare 1fr floors at its
+   content's min-content width, and prompt-token labels are long unbreakable
+   strings, so the tracks used to grow past the viewport and scroll the page
+   sideways. The .label ellipsis below only hides the text, it does not stop
+   the label from demanding the width. */
+.stats-cols {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px;
+}
+.stats-cols > div { min-width: 0; }
 .stats-cols h3 { font-size: 13px; color: var(--muted); margin: 4px 0 8px; }
 .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12.5px; }
 .bar-row .label {
   width: 42%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; flex-shrink: 0;
 }
 .bar-row .bar {
   flex: 1; height: 10px; background: var(--border); border-radius: 5px; overflow: hidden;
@@ -299,7 +340,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
   height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2));
 }
 .bar-row .count { width: 44px; text-align: right; color: var(--muted); }
-@media (max-width: 720px) { .stats-cols { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .stats-cols { grid-template-columns: minmax(0, 1fr); } }
 
 /* quality badge */
 .q-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 20px; }
@@ -307,7 +348,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
 .q-badge.mid { background: rgba(240,180,41,.15); color: var(--warn); }
 .q-badge.bad { background: rgba(239,91,91,.15); color: var(--err); }
 .trash-btn { background: none; border: none; padding: 2px 4px; font-size: 13px; }
-.trash-btn:hover { color: var(--err); }
+@media (hover: hover) { .trash-btn:hover { color: var(--err); } }
 
 /* content rating (후방주의) */
 .item { position: relative; }
@@ -325,7 +366,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
   cursor: pointer; max-width: 320px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; color: var(--accent);
 }
-.dir-chip:hover { text-decoration: line-through; }
+@media (hover: hover) { .dir-chip:hover { text-decoration: line-through; } }
 
 /* pagination */
 .pager {
@@ -351,7 +392,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
 /* audit log */
 .audit-list { display: flex; flex-direction: column; gap: 2px; }
 .audit-row {
-  display: grid; grid-template-columns: 150px 120px 170px 1fr auto;
+  display: grid; grid-template-columns: 150px 120px 170px minmax(0, 1fr) auto;
   gap: 10px; padding: 6px 8px; border-bottom: 1px solid var(--border);
   font-size: 12.5px; align-items: baseline;
 }
@@ -370,7 +411,7 @@ button.ghost { background: none; border: none; font-size: 16px; }
 .audit-row.fail .action { color: var(--err); }
 .audit-row .badge-ok { font-size: 11px; }
 @media (max-width: 860px) {
-  .audit-row { grid-template-columns: 1fr; gap: 2px; }
+  .audit-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 
 /* worker status */
@@ -400,4 +441,121 @@ button.ghost { background: none; border: none; font-size: 16px; }
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--panel2); border: 1px solid var(--accent);
   padding: 10px 18px; border-radius: 10px; z-index: 99;
+  /* Renders arbitrary server `detail` strings, so without a bound a long
+     error extends past both viewport edges at any width. */
+  max-width: min(92vw, 420px); width: max-content;
+  word-break: break-word; text-align: center;
+}
+
+/* ------------------------------------------------------------------ phones
+   Everything below 560px. Additive only: nothing above this width changes,
+   so the desktop layout and its 32px control density are untouched.
+
+   One breakpoint, not a phone+tablet pair: the target is 390-430px portrait,
+   and the 430-560 gap holds only split-screen windows, which want the phone
+   layout anyway. The existing 720/860 queries above are the tablet tier.
+   Landscape phones are deliberately excluded — width is ample there and the
+   only problem is height, handled by the max-height query at the end. */
+@media (max-width: 560px) {
+  :root { --phone: 1; }
+
+  /* Header: 137px and three stacked rows -> one ~53px row, still sticky.
+     nowrap makes the pile-up structurally impossible and leaves nav (already
+     flex:1, min-width:0) as the sole shrink target, so its overflow-x
+     scrolls. The brand is decoration here; the login screen and <title>
+     carry it. #userChip is the one real loss. */
+  header { flex-wrap: nowrap; padding: 6px 10px; gap: 6px 8px; }
+  .brand, #userChip { display: none; }
+  #logoutBtn [data-i18n] { display: none; }   /* leave the ⏻ glyph */
+  header select, header button { min-height: 40px; }
+  /* Theme and language are set once; the tabs are used constantly. At 16px
+     these two selects took 190px of 355, leaving nav one tab wide. A <select>
+     opens a native picker rather than focusing a text field, so shrinking it
+     does not trigger iOS's zoom-on-focus — that rule is for text inputs. */
+  header select { font-size: 13px; padding: 8px 6px; }
+  main { padding: 12px 10px; }
+
+  /* Detail modal: the image used to take 74% of the screen and push the
+     metadata — the thing users came to copy — entirely below the fold. */
+  .modal-box { width: 100vw; max-height: 100vh; max-height: 100dvh; border-radius: 0; }
+  .modal-head { padding: 8px 10px; }
+  .modal-head h3 {
+    flex: 1; min-width: 0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .modal-actions { flex-shrink: 0; }
+  /* Applying the .vertical cap to the base selector too makes the layout
+     class stop mattering, which is what makes hiding the ⇅ toggle honest:
+     it is redundant here rather than broken. */
+  #layoutToggle { display: none; }
+  .modal-body { padding: 12px 10px; gap: 12px; }
+  .modal-body img, .modal-body.vertical img {
+    width: auto; max-width: 100%; max-height: 38vh;
+    object-fit: contain; margin: 0 auto; display: block;
+  }
+  /* Collapse two nested scrollers into one. A <pre> scrolling inside a
+     scrolling .modal-body is the classic "I can't reach it" trap on touch. */
+  #modalMeta { max-height: none; }
+  .copy-formats {
+    display: flex; gap: 8px; overflow-x: auto; flex-wrap: nowrap;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    /* Without this the row's min-content width (the sum of its non-shrinking
+       buttons) props open every ancestor instead of scrolling. */
+    min-width: 0;
+  }
+  .copy-formats::-webkit-scrollbar { display: none; }
+  /* Same trap as .tab: without these the buttons shrink and their Korean
+     labels wrap one glyph per line instead of the row scrolling. */
+  .copy-formats button { white-space: nowrap; flex: 0 0 auto; }
+
+  /* Touch targets. 16px on inputs is not cosmetic: below it iOS Safari zooms
+     the viewport on focus, which makes a correctly-scaled page feel jumpy. */
+  input, select, button { padding: 10px 12px; font-size: 16px; min-height: 44px; }
+  input[type="checkbox"] {
+    min-height: 0; width: 20px; height: 20px; accent-color: var(--accent);
+  }
+  input.num { width: 84px; }   /* keep 4 digits at the larger font */
+  .row label { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; }
+  /* One rule fixes both call sites of starSpan() — cards and the modal —
+     taking five 15x16px targets to 44x44 with no JS change. 5x44 = 220px
+     still fits a 335px card. touch-action stops rapid successive taps being
+     read as double-tap-zoom; pinch-zoom is deliberately left alone. */
+  .stars { display: inline-flex; letter-spacing: 0; }
+  .stars .s {
+    min-width: 44px; line-height: 44px; text-align: center;
+    font-size: 20px; touch-action: manipulation;
+  }
+  .fav-btn, .trash-btn, .pager button, #modalClose, #libFav {
+    min-height: 44px; min-width: 44px;
+  }
+  .pager button { touch-action: manipulation; }
+  .item .overlay { flex-wrap: wrap; gap: 4px 8px; }
+
+  /* Library filter disclosure */
+  #libSearch { flex: 1 1 100%; }
+  /* display stays list-item so the native disclosure triangle survives — with
+     the filters collapsed it is the only cue that they are still there. */
+  .filters > summary {
+    cursor: pointer; min-height: 44px; padding: 10px 2px 10px 4px;
+    color: var(--muted);
+  }
+  .filters > summary #libFilterCount { margin-left: 8px; }
+  /* The summaries are now the primary way to move around this tab, so they
+     need to be tappable. Keep display:list-item so the native disclosure
+     marker survives — it is a free affordance. */
+  details.card > summary { min-height: 44px; padding: 10px 2px; }
+  details.card[open] > summary { margin-bottom: 6px; }
+
+  /* Settings: 11 cards, 4828px of continuous scroll. Collapsed, the save row
+     would scroll away with them, so pin it. .toast's z-index 99 clears this. */
+  #tab-settings > .row:last-child {
+    position: sticky; bottom: 0; z-index: 5; margin: 0; padding: 8px 10px;
+    background: var(--panel); border-top: 1px solid var(--border);
+  }
+}
+
+/* Landscape phones: width is fine, height is not — 137px of sticky header on
+   a 375px-tall viewport is a third of it. */
+@media (max-height: 480px) {
+  header { position: static; }
 }

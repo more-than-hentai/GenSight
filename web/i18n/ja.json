@@ -32,6 +32,7 @@
   "lib.allCRatings": "すべての等級",
   "lib.crUnrated": "等級未分類",
   "lib.sortLabel": "並び替え",
+  "lib.filters": "フィルター",
   "lib.nsfwShow": "クリックして表示",
   "sort.recent": "登録が新しい順",
   "sort.oldest": "登録が古い順",
