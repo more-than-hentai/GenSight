@@ -238,6 +238,16 @@ def _row_to_item(row: sqlite3.Row) -> dict[str, Any]:
             d["quality_issues"] = json.loads(d["quality_issues"])
         except json.JSONDecodeError:
             d["quality_issues"] = []
+    # Rows scanned before LoRA extraction existed still carry the inline
+    # <lora:…> tags in the prompt, so the applied list can be recovered here
+    # without a rescan. Derived, never written back — a later rescan fills the
+    # stored params in properly. Only for the inline format: ComfyUI keeps its
+    # LoRAs in the node graph, which is not stored on the row.
+    if "Lora" not in d["params"] and "<lora:" in (d.get("prompt") or "").lower():
+        from . import metadata
+
+        metadata._format_loras(
+            metadata._loras_from_prompt(d["prompt"]), 0, {"params": d["params"]})
     # Keep the shape the frontend already understands
     d["file"] = d["path"]
     d["favorite"] = bool(d["favorite"])
