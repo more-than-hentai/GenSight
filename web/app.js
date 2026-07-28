@@ -1821,7 +1821,9 @@ async function copyWithImage(r, text) {
 
 /* ---------------------------------------------------------- formatters */
 
-const PARAM_ORDER = ["Sampler", "Scheduler", "Steps", "CFG scale", "Seed", "Size", "Denoise", "Model hash", "Model", "VAE", "Clip skip"];
+// "Lora" sits next to the model because it is a generation input of the same
+// weight; left to insertion order it would trail after "Lora hashes".
+const PARAM_ORDER = ["Sampler", "Scheduler", "Steps", "CFG scale", "Seed", "Size", "Denoise", "Model hash", "Model", "Lora", "Lora (off)", "VAE", "Clip skip"];
 
 function orderedParams(r) {
   const out = {};

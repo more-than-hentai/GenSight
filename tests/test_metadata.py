@@ -114,3 +114,127 @@ def test_plain_image(tmp_path):
     assert r["tool"] == "unknown"
     assert r["error"] is None
     assert r["params"]["Size"] == "32x32"
+
+
+# ---------------------------------------------------------------- LoRA
+#
+# Shapes copied from real files in this library. The one thing every case is
+# really testing: "applied" comes from the loader's own enable flag, never from
+# the weight and never from the prompt text. These loaders leave switched-off
+# LoRAs in their text widget at full strength, so a weight threshold or a text
+# parse reports them as applied — measured at two thirds of all entries.
+
+def test_a1111_inline_loras_are_listed_with_weights(tmp_path):
+    text = (
+        "portrait <lora:krea2_doll_portrait:0.9> and "
+        "<lora:krea2_kgirl_v3:0.4>, detailed\n"
+        "Steps: 8, Sampler: euler, Seed: 1"
+    )
+    r = metadata.extract(_png_with_text(tmp_path, "parameters", text))
+    assert r["params"]["Lora"] == "krea2_doll_portrait (0.9), krea2_kgirl_v3 (0.4)"
+    assert "Lora (off)" not in r["params"]
+
+
+def test_a1111_without_loras_adds_no_field(tmp_path):
+    r = metadata.extract(_png_with_text(tmp_path, "parameters", A1111_TEXT))
+    assert "Lora" not in r["params"]
+
+
+def _comfy_with(node: dict, tmp_path):
+    graph = dict(COMFY_GRAPH)
+    graph["99"] = node
+    return metadata.extract(_png_with_text(tmp_path, "prompt", json.dumps(graph)))
+
+
+def test_lora_manager_reports_only_active_entries(tmp_path):
+    """The crux: five disabled entries at strength 1 alongside one enabled at
+    0.90, all six present in the node's own `text` widget."""
+    r = _comfy_with({
+        "class_type": "Lora Loader (LoraManager)",
+        "inputs": {
+            "text": ("<lora:fedor_bypass:1.00> <lora:krea2_kgirl_v1:1.00> "
+                     "<lora:krea2_kgirl_v2:1.00> <lora:krea2_raw_krwoman_v1:1.00> "
+                     "<lora:krea2_kgirl_v3:0.90> <lora:krea2filterbypass:1.00>"),
+            "loras": {"__value__": [
+                {"name": "fedor_bypass", "strength": 1, "active": False},
+                {"name": "krea2_kgirl_v1", "strength": 1, "active": False},
+                {"name": "krea2_kgirl_v2", "strength": 1, "active": False},
+                {"name": "krea2_raw_krwoman_v1", "strength": 1, "active": False},
+                {"name": "krea2_kgirl_v3", "strength": "0.90", "active": True},
+                {"name": "krea2filterbypass", "strength": 1, "active": False},
+            ]},
+        },
+    }, tmp_path)
+    assert r["params"]["Lora"] == "krea2_kgirl_v3 (0.9)"
+    assert r["params"]["Lora (off)"] == "5"
+
+
+def test_lora_manager_editor_history_is_ignored(tmp_path):
+    """__lm_autocomplete_meta_text holds what was last typed, not what was
+    applied — its weight disagrees with the real one."""
+    r = _comfy_with({
+        "class_type": "Lora Loader (LoraManager)",
+        "inputs": {
+            "__lm_autocomplete_meta_text": {
+                "lastAccepted": {"insertedText": "<lora:KNPV4.1_pre:1>"}},
+            "text": "<lora:KNPV4.1_pre:0.15>",
+            "loras": {"__value__": [
+                {"name": "KNPV4.1_pre", "strength": "0.15", "active": True}]},
+        },
+    }, tmp_path)
+    assert r["params"]["Lora"] == "KNPV4.1_pre (0.15)"
+
+
+def test_power_lora_loader_uses_the_on_flag(tmp_path):
+    r = _comfy_with({
+        "class_type": "Power Lora Loader (rgthree)",
+        "inputs": {
+            "PowerLoraLoaderHeaderWidget": {"type": "PowerLoraLoaderHeaderWidget"},
+            "lora_1": {"on": True, "lora": "krea2_doll_portrait_v5.safetensors",
+                       "strength": 1},
+            "lora_2": {"on": False, "lora": "unused_v2.safetensors", "strength": 0.8},
+            "➕ Add Lora": "",
+        },
+    }, tmp_path)
+    assert r["params"]["Lora"] == "krea2_doll_portrait_v5 (1)"
+    assert r["params"]["Lora (off)"] == "1"
+
+
+def test_easy_lora_stack_respects_toggle_and_num_loras(tmp_path):
+    """Slots past num_loras keep stale values from earlier edits, and the whole
+    stack is gated by one toggle."""
+    inputs = {"toggle": True, "num_loras": 2}
+    for i, (name, strength) in enumerate(
+            [("first_v1.safetensors", 0.7), ("second_v2.safetensors", 1.1),
+             ("stale_leftover.safetensors", 2.0)], start=1):
+        inputs[f"lora_{i}_name"] = name
+        inputs[f"lora_{i}_model_strength"] = strength
+    r = _comfy_with({"class_type": "easy loraStack", "inputs": inputs}, tmp_path)
+    assert r["params"]["Lora"] == "first_v1 (0.7), second_v2 (1.1)"
+    assert "stale_leftover" not in r["params"]["Lora"]
+
+    inputs["toggle"] = False
+    off = _comfy_with({"class_type": "easy loraStack", "inputs": inputs}, tmp_path)
+    assert "Lora" not in off["params"]
+    assert off["params"]["Lora (off)"] == "2"
+
+
+def test_empty_stack_slots_are_skipped(tmp_path):
+    r = _comfy_with({
+        "class_type": "easy loraStack",
+        "inputs": {"toggle": True, "num_loras": 3,
+                   "lora_1_name": "None", "lora_2_name": "", "lora_3_name": "None"},
+    }, tmp_path)
+    assert "Lora" not in r["params"]
+    assert "Lora (off)" not in r["params"]
+
+
+def test_lora_names_are_normalised_across_loaders(tmp_path):
+    """A directory prefix and a .safetensors suffix must not make the same
+    LoRA read as two different ones."""
+    r = _comfy_with({
+        "class_type": "Power Lora Loader (rgthree)",
+        "inputs": {"lora_1": {"on": True, "lora": "sub/dir/style_v1.safetensors",
+                              "strength": 0.5}},
+    }, tmp_path)
+    assert r["params"]["Lora"] == "style_v1 (0.5)"

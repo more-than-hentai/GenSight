@@ -211,3 +211,39 @@ def test_tagger_unavailable_or_conflict(tmp_path, monkeypatch):
     r = client.post("/api/tagger/run", json={})
     # Without ML deps -> 409 unavailable; with deps but empty library -> 409 too
     assert r.status_code == 409
+
+
+def test_lora_is_recovered_for_rows_scanned_before_extraction_existed(
+        tmp_path, monkeypatch):
+    """The 6.7k A1111 rows already in this library carry their <lora:…> tags in
+    the stored prompt, so the applied list is derivable on read — no rescan and
+    no file access. Derived only, never written back."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    p = _png(tmp_path, "old.png", "navy")
+    db.upsert_image(_fake_item(
+        p, prompt="portrait <lora:style_v1:0.9>, <lora:face_v2:0.4>, detailed",
+        params={"Model": "modelA"}))          # no "Lora" key, as before
+
+    item = db.get_image(str(p))
+    assert item["params"]["Lora"] == "style_v1 (0.9), face_v2 (0.4)"
+
+    # The stored row is untouched; only the response carries the derived field.
+    raw = db.connect().execute(
+        "SELECT params FROM images WHERE path=?", (str(p),)).fetchone()[0]
+    assert "Lora" not in raw
+
+
+def test_stored_lora_field_wins_over_the_derived_one(tmp_path, monkeypatch):
+    """ComfyUI rows are extracted at scan time and their disabled LoRAs are
+    deliberately absent from the list — re-deriving from prompt text would put
+    them back."""
+    _use_tmp_data(tmp_path, monkeypatch)
+    p = _png(tmp_path, "comfy.png", "teal")
+    db.upsert_image(_fake_item(
+        p, tool="comfyui",
+        prompt="portrait <lora:disabled_v1:1.0> <lora:applied_v2:0.9>",
+        params={"Lora": "applied_v2 (0.9)", "Lora (off)": "1"}))
+
+    item = db.get_image(str(p))
+    assert item["params"]["Lora"] == "applied_v2 (0.9)"
+    assert "disabled_v1" not in item["params"]["Lora"]
