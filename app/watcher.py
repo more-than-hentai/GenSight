@@ -202,6 +202,17 @@ class WatchManager:
                 "watcher realtime batch: %d ingested, %d deferred (still writing)",
                 ingested, deferred,
             )
+        if ingested:
+            self._autotag()
+
+    def _autotag(self) -> None:
+        """Hand newly ingested files to the batch tagger, if enabled."""
+        try:
+            from . import tagger
+
+            tagger.tagger_manager.autorun()
+        except Exception:  # noqa: BLE001 - a watch tick must survive this
+            logger.exception("auto tagging hook failed")
 
     def _sweep(self, watch: dict) -> None:
         """Incremental polling scan of one watch directory."""
@@ -248,6 +259,7 @@ class WatchManager:
             )
             audit.record("watch.ingest", target=str(root),
                          detail={"ingested": processed})
+            self._autotag()
         else:
             logger.debug("watch sweep %s: no changes (%d known)", root, len(known))
 

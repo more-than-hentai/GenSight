@@ -144,6 +144,14 @@ class ScanJob:
                 self.with_metadata, elapsed,
                 self.processed / elapsed if elapsed else 0,
             )
+            if self.status == "done" and self.processed:
+                # After the batch, not per file — see TaggerManager.autorun.
+                try:
+                    from . import tagger
+
+                    tagger.tagger_manager.autorun()
+                except Exception:  # noqa: BLE001 - never fail a finished scan
+                    logger.exception("auto tagging hook failed")
             audit.record("scan.finish", target=self.directory, detail={
                 "job": self.id, "status": self.status,
                 "processed": self.processed, "total": self.total,

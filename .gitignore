@@ -6,11 +6,11 @@ venv/
 *.egg-info/
 .pytest_cache/
 
-# App data (settings, thumbnail cache)
+# App data (settings, DB, thumbnail cache). The glob covers side instances too
+# — data-preview/ for the dev preview, data-8050/ and friends for extra ports —
+# each of which holds a full library database that must never be committed.
 data/
-# Preview/dev instance data — kept separate from data/ so a second process
-# never runs a second folder watcher against the real library.
-data-preview/
+data-*/
 
 # OS / editor / local tooling
 .DS_Store

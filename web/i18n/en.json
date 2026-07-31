@@ -72,6 +72,7 @@
   "settings.tagger": "WD Tagger auto-tagging",
   "settings.taggerRun": "Run tagging",
   "settings.taggerHint": "Optional feature: pip install -r requirements-ml.txt (onnxruntime-gpu). Work is distributed across the GPUs enabled above.",
+  "settings.taggerAuto": "Auto-tag images added by scans/watch",
   "settings.untagged": "Untagged",
   "settings.quality": "Quality analysis",
   "settings.qualityRun": "Run quality analysis",
