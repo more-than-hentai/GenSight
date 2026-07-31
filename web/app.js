@@ -1769,7 +1769,7 @@ function metaTableHtml(r) {
     rows += `<tr><th class="syn-head">Tags</th>` +
       `<td class="prompt-cell">${escapeHtml(tags)}</td></tr>`;
   }
-  for (const [k, v] of Object.entries(orderedParams(r))) {
+  for (const [k, v] of Object.entries(allParams(r))) {
     rows += `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(String(v))}</td></tr>`;
   }
   return `<table class="meta-table">${rows}</table>`;
@@ -1877,6 +1877,26 @@ function tagLine(r) {
   return (r.tags || []).map((x) => x.replace(/^character:/, "")).join(", ");
 }
 
+// Quality and content rating were chips only, so neither survived a copy.
+// They describe the image rather than the generation, hence appended after the
+// sampler settings instead of mixed into them.
+function derivedInfo(r) {
+  const out = {};
+  if (r.quality_score !== null && r.quality_score !== undefined) {
+    const issues = (r.quality_issues || []).join(", ");
+    out.Quality = `${Math.round(r.quality_score)}/100` +
+      (issues ? ` (${issues})` : "");
+  }
+  if (r.content_rating) out.Rating = r.content_rating;
+  return out;
+}
+
+// Everything that belongs in a key/value dump, in one place so the copy
+// formats and the table view can never drift apart.
+function allParams(r) {
+  return { ...orderedParams(r), ...derivedInfo(r) };
+}
+
 // Some tools store prompts with escaped newlines ("\n" as two chars);
 // normalize them to real line breaks for display and copy.
 function normalizeText(s) {
@@ -1884,12 +1904,16 @@ function normalizeText(s) {
 }
 
 function formatResult(r, fmt) {
-  const params = orderedParams(r);
+  const params = allParams(r);
   const prompt = normalizeText(r.prompt);
   const negative = normalizeText(r.negative_prompt);
   const lora = loraLine(r);
   const tags = tagLine(r);
-  if (fmt === "prompt") return prompt;
+  // Prompt-only is the format meant to be pasted straight back into a
+  // generator, so the tags join the prompt here rather than sitting in their
+  // own section. Every other format keeps them labelled, so the recorded
+  // prompt stays exactly what produced the image.
+  if (fmt === "prompt") return [prompt, tags].filter(Boolean).join(", ");
   if (fmt === "readable") {
     let s = `Prompt:\n${prompt || "—"}\n`;
     if (negative) s += `\nNegative prompt:\n${negative}\n`;
