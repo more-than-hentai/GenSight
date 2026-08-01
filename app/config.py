@@ -45,6 +45,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # (roughly doubles per-file decode cost; off by default)
         "auto": False,
     },
+    "tagger": {
+        # Tag images added by a scan or a watch sweep. Unlike quality this is
+        # not done per file: loading an ONNX session costs seconds, so the
+        # batch tagger is triggered once after the ingest finishes and works
+        # through whatever is still untagged. Off by default — it needs the
+        # optional ML dependencies.
+        "auto": False,
+    },
     "archive": {
         # Purged library rows are snapshotted into archived_images rather
         # than deleted, so a mistaken purge does not throw away tags and

@@ -190,6 +190,24 @@ class TaggerManager:
             ).start()
             return self.job.summary()
 
+    def autorun(self) -> None:
+        """Tag whatever is untagged, if the setting is on. Never raises.
+
+        Triggered after a scan job or a watch sweep rather than per file:
+        loading an ONNX session costs seconds, so one batch over the backlog is
+        far cheaper than one session per image. Every refusal `run()` can raise
+        is benign here — already running, nothing to do, or the optional ML
+        dependencies are absent — so they are logged, not propagated into the
+        ingest path.
+        """
+        if not config.load_settings().get("tagger", {}).get("auto"):
+            return
+        try:
+            job = self.run()
+            logger.info("auto tagging started: %d image(s)", job.get("total", 0))
+        except Exception as e:  # noqa: BLE001 - ingest must not fail on this
+            logger.info("auto tagging skipped: %s", e)
+
     # -- worker side -------------------------------------------------
 
     def _run(self, job: TagJob, paths: list[str]) -> None:

@@ -72,6 +72,7 @@
   "settings.tagger": "WD Tagger 自動タグ付け",
   "settings.taggerRun": "タグ付け実行",
   "settings.taggerHint": "オプション機能です: pip install -r requirements-ml.txt (onnxruntime-gpu)。設定されたGPUに作業が分配されます。",
+  "settings.taggerAuto": "スキャン／監視で追加される画像を自動タグ付け",
   "settings.untagged": "未タグ",
   "settings.quality": "品質分析",
   "settings.qualityRun": "品質分析を実行",

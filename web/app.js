@@ -349,7 +349,18 @@ async function renderTagger() {
       (s.job ? ` · ${t("status." + s.job.status, s.job.status)}` : "");
   }
   $("#taggerStatus").textContent = text;
+  if (state.settings) {
+    $("#taggerAuto").checked = !!state.settings.tagger?.auto;
+  }
 }
+
+$("#taggerAuto").onchange = async (e) => {
+  try {
+    await api.send("PUT", "/api/settings", { tagger: { auto: e.target.checked } });
+    await loadSettings();
+    toast(t("toast.saved", "설정이 저장되었습니다"));
+  } catch (err2) { toast(err2.message, true); }
+};
 
 $("#taggerRun").onclick = async () => {
   try {
@@ -1748,7 +1759,17 @@ function metaTableHtml(r) {
     rows += `<tr><th class="syn-head">Negative</th>` +
       `<td class="prompt-cell">${escapeHtml(normalizeText(r.negative_prompt))}</td></tr>`;
   }
-  for (const [k, v] of Object.entries(orderedParams(r))) {
+  const lora = loraLine(r);
+  if (lora) {
+    rows += `<tr><th class="syn-head">LoRA</th>` +
+      `<td class="prompt-cell">${escapeHtml(lora)}</td></tr>`;
+  }
+  const tags = tagLine(r);
+  if (tags) {
+    rows += `<tr><th class="syn-head">Tags</th>` +
+      `<td class="prompt-cell">${escapeHtml(tags)}</td></tr>`;
+  }
+  for (const [k, v] of Object.entries(allParams(r))) {
     rows += `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(String(v))}</td></tr>`;
   }
   return `<table class="meta-table">${rows}</table>`;
@@ -1825,11 +1846,55 @@ async function copyWithImage(r, text) {
 // weight; left to insertion order it would trail after "Lora hashes".
 const PARAM_ORDER = ["Sampler", "Scheduler", "Steps", "CFG scale", "Seed", "Size", "Denoise", "Model hash", "Model", "Lora", "Lora (off)", "VAE", "Clip skip"];
 
+// LoRA and tags get their own labelled sections next to the prompt, so they
+// are excluded here to avoid printing them twice.
+const PROMOTED_PARAMS = ["Lora", "Lora (off)"];
+
 function orderedParams(r) {
   const out = {};
-  for (const k of PARAM_ORDER) if (r.params[k] !== undefined) out[k] = r.params[k];
-  for (const [k, v] of Object.entries(r.params)) if (!(k in out)) out[k] = v;
+  for (const k of PARAM_ORDER) {
+    if (r.params[k] !== undefined && !PROMOTED_PARAMS.includes(k)) out[k] = r.params[k];
+  }
+  for (const [k, v] of Object.entries(r.params)) {
+    if (!(k in out) && !PROMOTED_PARAMS.includes(k)) out[k] = v;
+  }
   return out;
+}
+
+// The applied LoRAs belong with the prompt, not buried among the sampler
+// settings: they change what was generated, and a long prompt pushes the
+// params block far off screen.
+function loraLine(r) {
+  const applied = r.params?.Lora;
+  if (!applied) return "";
+  const off = r.params?.["Lora (off)"];
+  return off ? `${applied}   (off: ${off})` : applied;
+}
+
+// WD Tagger output is danbooru vocabulary, so it is directly reusable as a
+// prompt — worth having inside the copied text rather than only as chips.
+function tagLine(r) {
+  return (r.tags || []).map((x) => x.replace(/^character:/, "")).join(", ");
+}
+
+// Quality and content rating were chips only, so neither survived a copy.
+// They describe the image rather than the generation, hence appended after the
+// sampler settings instead of mixed into them.
+function derivedInfo(r) {
+  const out = {};
+  if (r.quality_score !== null && r.quality_score !== undefined) {
+    const issues = (r.quality_issues || []).join(", ");
+    out.Quality = `${Math.round(r.quality_score)}/100` +
+      (issues ? ` (${issues})` : "");
+  }
+  if (r.content_rating) out.Rating = r.content_rating;
+  return out;
+}
+
+// Everything that belongs in a key/value dump, in one place so the copy
+// formats and the table view can never drift apart.
+function allParams(r) {
+  return { ...orderedParams(r), ...derivedInfo(r) };
 }
 
 // Some tools store prompts with escaped newlines ("\n" as two chars);
@@ -1839,13 +1904,21 @@ function normalizeText(s) {
 }
 
 function formatResult(r, fmt) {
-  const params = orderedParams(r);
+  const params = allParams(r);
   const prompt = normalizeText(r.prompt);
   const negative = normalizeText(r.negative_prompt);
-  if (fmt === "prompt") return prompt;
+  const lora = loraLine(r);
+  const tags = tagLine(r);
+  // Prompt-only is the format meant to be pasted straight back into a
+  // generator, so the tags join the prompt here rather than sitting in their
+  // own section. Every other format keeps them labelled, so the recorded
+  // prompt stays exactly what produced the image.
+  if (fmt === "prompt") return [prompt, tags].filter(Boolean).join(", ");
   if (fmt === "readable") {
     let s = `Prompt:\n${prompt || "—"}\n`;
     if (negative) s += `\nNegative prompt:\n${negative}\n`;
+    if (lora) s += `\nLoRA:\n${lora}\n`;
+    if (tags) s += `\nTags:\n${tags}\n`;
     s += "\n";
     for (const [k, v] of Object.entries(params)) s += `${k}: ${v}\n`;
     return s;
@@ -1853,13 +1926,20 @@ function formatResult(r, fmt) {
   r = { ...r, prompt, negative_prompt: negative };
   if (fmt === "json") {
     return JSON.stringify(
-      { prompt: r.prompt, negative_prompt: r.negative_prompt, ...params },
+      {
+        prompt: r.prompt, negative_prompt: r.negative_prompt,
+        ...(lora ? { lora: r.params.Lora, lora_off: r.params["Lora (off)"] } : {}),
+        ...(tags ? { tags: r.tags } : {}),
+        ...params,
+      },
       null, 2
     );
   }
   if (fmt === "markdown") {
     let s = `**Prompt**\n\`\`\`\n${r.prompt}\n\`\`\`\n`;
     if (r.negative_prompt) s += `**Negative prompt**\n\`\`\`\n${r.negative_prompt}\n\`\`\`\n`;
+    if (lora) s += `**LoRA** ${lora}\n\n`;
+    if (tags) s += `**Tags**\n\`\`\`\n${tags}\n\`\`\`\n`;
     s += `| Key | Value |\n|---|---|\n`;
     for (const [k, v] of Object.entries(params)) s += `| ${k} | ${v} |\n`;
     return s;
@@ -1868,6 +1948,8 @@ function formatResult(r, fmt) {
     // Plain-text fallback; the HTML flavour is what the editor uses.
     let s = `${prompt}\n`;
     if (negative) s += `\n[Negative] ${negative}\n`;
+    if (lora) s += `\n[LoRA] ${lora}\n`;
+    if (tags) s += `\n[Tags] ${tags}\n`;
     s += "\n";
     for (const [k, v] of Object.entries(params)) s += `${k}: ${v}\n`;
     return s;
@@ -1875,6 +1957,8 @@ function formatResult(r, fmt) {
   if (fmt === "bbcode") {
     let s = `[b]Prompt[/b]\n[code]${r.prompt}[/code]\n`;
     if (r.negative_prompt) s += `[b]Negative prompt[/b]\n[code]${r.negative_prompt}[/code]\n`;
+    if (lora) s += `[b]LoRA[/b]: ${lora}\n`;
+    if (tags) s += `[b]Tags[/b]\n[code]${tags}[/code]\n`;
     for (const [k, v] of Object.entries(params)) s += `[b]${k}[/b]: ${v}\n`;
     return s;
   }

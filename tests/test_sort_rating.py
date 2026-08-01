@@ -146,3 +146,53 @@ def test_auto_quality_on_ingest(tmp_path, monkeypatch):
     item = db.get_image(str(p))
     assert item["quality_score"] is not None
     assert "too_dark" in item["quality_issues"]
+
+
+# ------------------------------------------------- auto tagging after ingest
+#
+# autorun() sits in the ingest path — a scan job's finally block and every
+# watch sweep — so what matters is that it obeys the setting and that it can
+# never turn a tagging problem into a failed scan.
+
+def _tmp_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "SETTINGS_FILE", tmp_path / "data" / "settings.json")
+
+
+def test_autorun_is_off_by_default(tmp_path, monkeypatch):
+    _tmp_settings(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(tagger.tagger_manager, "run",
+                        lambda *a, **k: calls.append(1) or {"total": 0})
+    tagger.tagger_manager.autorun()
+    assert calls == [], "tagging must not start unless the operator enabled it"
+
+
+def test_autorun_starts_a_batch_when_enabled(tmp_path, monkeypatch):
+    _tmp_settings(tmp_path, monkeypatch)
+    config.update_settings({"tagger": {"auto": True}})
+    calls = []
+
+    def fake_run(*a, **k):
+        calls.append(1)
+        return {"total": 3}
+
+    monkeypatch.setattr(tagger.tagger_manager, "run", fake_run)
+    tagger.tagger_manager.autorun()
+    assert calls == [1]
+
+
+def test_autorun_swallows_every_refusal(tmp_path, monkeypatch):
+    """"already running", "no untagged images" and a missing onnxruntime are
+    all normal here — none of them may propagate into a scan or a watch tick."""
+    _tmp_settings(tmp_path, monkeypatch)
+    config.update_settings({"tagger": {"auto": True}})
+    for boom in (RuntimeError("tagging already running"),
+                 RuntimeError("no untagged images"),
+                 tagger.TaggerUnavailable(tagger.INSTALL_HINT),
+                 OSError("disk went away")):
+        def fake_run(*a, _e=boom, **k):
+            raise _e
+
+        monkeypatch.setattr(tagger.tagger_manager, "run", fake_run)
+        tagger.tagger_manager.autorun()   # must not raise

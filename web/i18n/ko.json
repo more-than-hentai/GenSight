@@ -72,6 +72,7 @@
   "settings.tagger": "WD Tagger 자동 태깅",
   "settings.taggerRun": "태깅 실행",
   "settings.taggerHint": "선택 설치 기능입니다: pip install -r requirements-ml.txt (onnxruntime-gpu). 설정된 GPU에 작업이 분배됩니다.",
+  "settings.taggerAuto": "스캔/감시로 추가되는 이미지 자동 태깅",
   "settings.untagged": "미태깅",
   "settings.quality": "품질 분석",
   "settings.qualityRun": "품질 분석 실행",
