@@ -93,6 +93,13 @@ def extract(path: str | Path) -> dict[str, Any]:
             else:
                 _parse_a1111(exif_text, result)
                 result["tool"] = "a1111"
+
+        # Some ComfyUI save nodes write an A1111-style `parameters` block plus
+        # the UI graph in `workflow`, and no API graph in `prompt`. Such a file
+        # is detected as a1111 above, so the LoRA loaders would never be looked
+        # at — yet `workflow` is the only place the applied LoRAs are recorded.
+        if not result["params"].get("Lora") and "workflow" in info:
+            _loras_from_workflow(info["workflow"], result)
     except Exception as e:  # noqa: BLE001 - per-file failures must not kill a scan
         result["error"] = f"{type(e).__name__}: {e}"
     return result
@@ -240,6 +247,62 @@ def _loras_from_comfy(nodes: dict) -> tuple[list[tuple[str, float | None]], int]
                     disabled += 1
 
     return active, disabled
+
+
+def _loras_from_workflow(raw: Any, result: dict) -> None:
+    """Applied LoRAs from the UI-format `workflow` graph.
+
+    Different shape from the `prompt` chunk: a `nodes` array of objects with
+    `type`/`mode`/`properties`, not a dict keyed by node id. A node's `mode` is
+    0 when live — 2 (mute) and 4 (bypass) mean it did not run, so its LoRAs
+    were not applied no matter what its widgets say.
+    """
+    if not _looks_like_json(raw):
+        return
+    try:
+        graph = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if not isinstance(nodes, list):
+        return
+
+    active: list[tuple[str, float | None]] = []
+    disabled = 0
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if "lora" not in str(node.get("type", "")).lower():
+            continue
+        if node.get("mode") not in (0, None):
+            continue  # muted or bypassed: the node did not run
+        props = node.get("properties")
+        if not isinstance(props, dict):
+            continue
+        # MultiLoRALoader keeps its slots as a JSON *string* under
+        # properties.lora_data — one more layer than the other loaders.
+        entries = props.get("lora_data")
+        if isinstance(entries, str):
+            try:
+                entries = json.loads(entries)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            name = _lora_name(e.get("lora") or e.get("name"))
+            if not name:
+                continue
+            if e.get("on"):
+                active.append((name, _lora_weight(
+                    e.get("str", e.get("strength")))))
+            else:
+                disabled += 1
+
+    if active or disabled:
+        _format_loras(active, disabled, result)
 
 
 # ---------------------------------------------------------------- A1111

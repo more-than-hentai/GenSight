@@ -238,3 +238,79 @@ def test_lora_names_are_normalised_across_loaders(tmp_path):
                               "strength": 0.5}},
     }, tmp_path)
     assert r["params"]["Lora"] == "style_v1 (0.5)"
+
+
+def _workflow_png(tmp_path, nodes, with_parameters=True):
+    """A file shaped like this library's current ComfyUI output: an A1111-style
+    `parameters` block plus the UI graph in `workflow`, and no `prompt`."""
+    p = tmp_path / "wf.png"
+    img = Image.new("RGB", (64, 64), "black")
+    info = PngImagePlugin.PngInfo()
+    if with_parameters:
+        info.add_text("parameters", A1111_TEXT)
+    info.add_text("workflow", json.dumps({"nodes": nodes}))
+    img.save(p, pnginfo=info)
+    return p
+
+
+def _multi_lora_node(entries, mode=0, node_id=186):
+    # lora_data is a JSON *string* inside properties — one layer deeper than
+    # the other loaders keep their slots.
+    return {"id": node_id, "type": "MultiLoRALoader", "mode": mode,
+            "properties": {"lora_data": json.dumps(entries)}}
+
+
+def test_multi_lora_loader_read_from_the_workflow_chunk(tmp_path):
+    """The file is detected as a1111 because `parameters` exists, so the LoRAs
+    are only reachable through `workflow`."""
+    p = _workflow_png(tmp_path, [_multi_lora_node([
+        {"on": True, "lora": "Krea 2/concept/snofs_krea_v1_1.safetensors",
+         "str": 0.2, "clip": 1},
+        {"on": True, "lora": "trainer/krea2_doll/krea2_doll_v1.2.safetensors",
+         "str": 1, "clip": 1},
+        {"on": False, "lora": "Krea 2/style/unused.safetensors", "str": 1},
+    ])])
+    r = metadata.extract(p)
+    assert r["tool"] == "a1111"
+    assert r["params"]["Lora"] == "snofs_krea_v1_1 (0.2), krea2_doll_v1.2 (1)"
+    assert r["params"]["Lora (off)"] == "1"
+
+
+def test_bypassed_lora_node_is_ignored(tmp_path):
+    """mode 4 is bypass and mode 2 is mute — the node never ran, so nothing it
+    lists was applied, however its widgets are set."""
+    for mode in (2, 4):
+        p = _workflow_png(tmp_path, [_multi_lora_node(
+            [{"on": True, "lora": "applied_anyway.safetensors", "str": 1}],
+            mode=mode)])
+        r = metadata.extract(p)
+        assert "Lora" not in r["params"], f"mode={mode} should not contribute"
+
+
+def test_workflow_loras_do_not_override_a_richer_source(tmp_path):
+    """A file carrying inline A1111 tags already has its answer; the workflow
+    pass must not replace it."""
+    text = ("a knight <lora:inline_v1:0.55>\n"
+            "Steps: 8, Sampler: euler, Seed: 1")
+    p = tmp_path / "both.png"
+    info = PngImagePlugin.PngInfo()
+    info.add_text("parameters", text)
+    info.add_text("workflow", json.dumps({"nodes": [_multi_lora_node(
+        [{"on": True, "lora": "from_graph.safetensors", "str": 1}])]}))
+    Image.new("RGB", (64, 64), "black").save(p, pnginfo=info)
+    r = metadata.extract(p)
+    assert r["params"]["Lora"] == "inline_v1 (0.55)"
+
+
+def test_malformed_workflow_chunk_is_survivable(tmp_path):
+    for bad in ("not json at all", "{}", '{"nodes": "nope"}',
+                '{"nodes": [{"type": "MultiLoRALoader", "mode": 0,'
+                ' "properties": {"lora_data": "<<broken>>"}}]}'):
+        p = tmp_path / "bad.png"
+        info = PngImagePlugin.PngInfo()
+        info.add_text("parameters", A1111_TEXT)
+        info.add_text("workflow", bad)
+        Image.new("RGB", (64, 64), "black").save(p, pnginfo=info)
+        r = metadata.extract(p)
+        assert r["error"] is None, bad
+        assert "Lora" not in r["params"]
